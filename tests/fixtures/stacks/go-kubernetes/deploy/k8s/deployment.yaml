@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fixture
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fixture
+  template:
+    metadata:
+      labels:
+        app: fixture
+    spec:
+      containers:
+        - name: fixture
+          image: registry.invalid/fixture:1.0.0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fixture
+spec:
+  selector:
+    app: fixture
+  ports:
+    - port: 80
