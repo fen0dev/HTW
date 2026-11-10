@@ -1,7 +1,7 @@
 """Append-only audit log.
 
 One JSON object per line. Each record carries the hash of the previous one, so edits
-and deletions inside the file are detectable with `htw audit verify`. Truncating the
+and deletions inside the file are detectable with `htw audit-verify`. Truncating the
 end of the file is not detectable from the file alone, which is why the log should be
 shipped to storage the scanned repositories cannot write to.
 """

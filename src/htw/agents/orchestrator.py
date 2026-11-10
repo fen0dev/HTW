@@ -89,7 +89,9 @@ class Orchestrator:
     def scan(self, asset_ids: Sequence[str] | None = None) -> list[AssetRun]:
         """Scan the selected assets (all declared assets by default)."""
         assets = self.select_assets(asset_ids)
-        self.config.state_dir.mkdir(parents=True, exist_ok=True)
+        if not self.config.state_dir.exists():
+            # Reports describe unfixed weaknesses: readable by the operator only.
+            self.config.state_dir.mkdir(parents=True, mode=0o700)
         try:
             self.kill_switch.raise_if_engaged()
         except KillSwitchEngaged as exc:

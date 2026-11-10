@@ -185,3 +185,18 @@ def test_assets_are_required_and_unique(tmp_path: Path, make_scope) -> None:
 def test_invalid_yaml_is_a_config_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="not valid YAML"):
         load(tmp_path, "version: 1\nassets: [\n")
+
+
+def test_the_example_files_in_the_repository_are_valid() -> None:
+    from datetime import date
+
+    from htw.core.suppressions import load_suppressions
+
+    examples = Path(__file__).parent.parent / "config"
+    config = load_config(examples / "htw.example.yaml")
+    suppressions = load_suppressions(examples / "suppressions.example.yaml", date(2026, 1, 1))
+
+    assert [asset.id for asset in config.assets] == ["payments-api", "build-scripts"]
+    assert config.fixes.propose is False
+    assert all(asset.max_level is ControlLevel.L0 for asset in config.assets)
+    assert len(suppressions.active) == 2

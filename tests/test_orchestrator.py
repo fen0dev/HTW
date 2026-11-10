@@ -647,6 +647,6 @@ def test_every_run_leaves_a_verifiable_audit_trail(harness: Harness) -> None:
 def test_state_files_are_private_to_the_operator(harness: Harness) -> None:
     harness.scan()
 
-    for name in ("state.db", "audit.jsonl"):
+    for name in (".", "state.db", "audit.jsonl"):
         assert (harness.state / name).stat().st_mode & 0o077 == 0, name
     assert os.access(harness.state, os.W_OK)

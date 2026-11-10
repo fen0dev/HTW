@@ -13,3 +13,7 @@ have never been valid anywhere and grant access to nothing. Hosts use the reserv
 
 Dependency manifests here pin old versions on purpose. Do not "fix" them, and expect
 dependency bots to complain about this directory.
+
+The integration tests scan a temporary copy of `vulnerable-app/`, never the directory
+in place: Semgrep's default ignore list skips directories named `tests`, and the tests
+modify the copy. HTW's scan of its own repository excludes `tests/fixtures`.
