@@ -185,6 +185,8 @@ Reports describe where a weakness is and how to remedy it, never how to exploit 
 They are written to the state directory, which HTW creates readable by its owner
 only, and nothing is uploaded anywhere. Every report opens with a
 notice not to paste it into public issues, pull requests or chats.
+`htw digest` only reads those reports and writes `digest.md` in the same state
+directory. It does not start a server and does not send the digest anywhere.
 
 ## Current limits
 

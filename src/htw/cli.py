@@ -10,6 +10,7 @@ from pathlib import Path
 
 from htw import __version__
 from htw.agents import AGENTS
+from htw.agents.digest import write_digest
 from htw.agents.orchestrator import Orchestrator
 from htw.agents.reporting import console_summary, gap_notice
 from htw.agents.run import INCOMPLETE, REFUSED, STOPPED, AssetRun
@@ -235,6 +236,14 @@ def cmd_scan(arguments: argparse.Namespace) -> int:
     return _exit_code(runs, fail_on, arguments.strict)
 
 
+def cmd_digest(arguments: argparse.Namespace) -> int:
+    config = _load(arguments)
+    path, text = write_digest(config, arguments.asset)
+    print(text)
+    print(f"digest: {path}")
+    return EXIT_OK
+
+
 def cmd_audit_verify(arguments: argparse.Namespace) -> int:
     config = _load(arguments)
     result = AuditLog(config.audit_path).verify()
@@ -285,6 +294,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--strict", action="store_true",
         help="exit 3 if part of the detected stack could not be covered by an installed scanner",
     )  # fmt: skip
+
+    digest = add(
+        "digest",
+        cmd_digest,
+        "Write a local digest of the latest finished scan. Reads reports already on disk.",
+    )
+    digest.add_argument(
+        "--asset", action="append", help="asset id from the scope file (repeatable)"
+    )
 
     audit = add("audit-verify", cmd_audit_verify, "Verify the hash chain of the audit log.")
     del audit
