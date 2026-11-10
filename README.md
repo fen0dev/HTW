@@ -1,4 +1,4 @@
-# HTW
+# HTW - Hack The Web
 
 Security scanning agents that an engineering team runs on its **own** systems. HTW
 detects what a codebase is made of, runs the established open-source scanners that
