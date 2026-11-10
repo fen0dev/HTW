@@ -328,15 +328,19 @@ The full list, with where each is implemented and its current limits, is in
 - **Secrets are redacted at the source.** Reports, SARIF, the state database and the
   audit log hold the location and kind of a secret, never its value.
 - **Scanners are contained**: no shell, a scrubbed environment (your tokens do not
-  reach them), timeouts and output limits.
+  reach them), timeouts and output limits. When `bwrap` works, each scanner also
+  runs in a process sandbox: the asset is read-only, the home directory is not
+  mounted, and tools that do not use the network lose it. `git` and `gh` are not
+  wrapped, so a draft pull request can still use the login you already have.
 - **Kill switch**: `touch .htw/STOP` or `HTW_KILL_SWITCH=1` stops everything.
 - **Audit log** with a hash chain; `htw audit-verify` detects edits.
 - **Scanned content is treated as hostile**: no symlinks followed, nothing read
   outside the asset, scanner text escaped in reports.
 
-Two limits to know about now: scanners run as ordinary local processes, without a
-filesystem or network sandbox, and HTW does not verify the scanner binaries. Run HTW
-as an unprivileged user on a machine that holds no credentials it does not need.
+Two limits to know about now: the process sandbox is bubblewrap, not a
+digest-pinned container, and it is skipped (with a note in the report) where
+`bwrap` cannot start. HTW does not verify the scanner binaries. Run HTW as an
+unprivileged user on a machine that holds no credentials it does not need.
 
 ## What leaves your machine
 
@@ -383,7 +387,14 @@ What this release does not do. Each item is planned unless noted.
   package. A model is optional (`triage.llm`) and off by default; with no provider
   configured, HTW makes no network call. The model may only mark a false positive
   or lower confidence. It does not receive secret context or a proposed patch.
-- **No sandbox** around scanners, and no network egress control. See
+- **CI systems with no wrapped scanner stay unscanned.** Jenkins, Tekton, Travis,
+  Drone, CodeBuild and the other systems the detector names but Checkov and zizmor
+  do not read are reported as `no wrapped scanner`. Installing another copy of
+  Checkov does not close that gap, and HTW does not add a scanner for them.
+- **The process sandbox is not a network allowlist.** Bubblewrap, when it starts,
+  hides the home directory and keeps the asset read-only. It does not pin scanner
+  images by digest and does not restrict egress to a list of addresses. Where
+  `bwrap` is missing, scanners run as this user and the report says so. See
   [docs/guardrails.md](docs/guardrails.md#current-limits).
 - **Reports go to files.** No issue tracker or chat integration. Draft pull
   requests are GitHub only, and only when `fixes.pull_requests` is true.

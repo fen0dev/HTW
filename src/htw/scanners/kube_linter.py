@@ -26,7 +26,7 @@ class KubeLinter(ToolAdapter):
 
     def scan(self, ctx: ScanContext) -> list[Finding]:
         argv = ["kube-linter", "lint", ".", "--format", "json"]
-        result = ctx.runner.run(argv, cwd=ctx.root)
+        result = self.invoke(ctx, argv)
         if not result.stdout.strip():
             if result.returncode == 0:
                 return []

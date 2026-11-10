@@ -28,6 +28,8 @@ class CommandRunner(Protocol):
         cwd: Path,
         timeout_seconds: int | None = None,
         extra_env: dict[str, str] | None = None,
+        *,
+        sandbox: bool | None = None,
     ) -> CommandResult: ...
 
 
@@ -153,7 +155,9 @@ def open_github_draft(
 
 def _run(runner: CommandRunner, argv: list[str], cwd: Path) -> CommandResult:
     _forbid_merge(argv)
-    result = runner.run(argv, cwd)
+    # git and gh use the operator's existing login. They are not scanner processes,
+    # and wrapping them would hide that login or require mounting the home directory.
+    result = runner.run(argv, cwd, sandbox=False)
     if result.returncode != 0:
         detail = result.stderr_tail or result.stdout[-400:].strip() or "no output"
         raise ToolError(f"{argv[0]} failed (exit {result.returncode}): {detail}")

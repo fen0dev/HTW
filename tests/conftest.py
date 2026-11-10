@@ -98,7 +98,7 @@ class FakeRunner:
     def which(self, binary: str) -> str | None:
         return f"/fake/bin/{binary}" if binary in self.handlers else None
 
-    def run(self, argv, cwd, timeout_seconds=None, extra_env=None) -> CommandResult:
+    def run(self, argv, cwd, timeout_seconds=None, extra_env=None, **_kwargs) -> CommandResult:
         argv = list(argv)
         self.calls.append(argv)
         result = self.handlers[argv[0]](argv, Path(cwd))

@@ -67,7 +67,7 @@ class Hadolint(ToolAdapter):
         if not files:
             return []
         argv = ["hadolint", "--format", "json", "--no-color", *files]
-        result = ctx.runner.run(argv, cwd=ctx.root)
+        result = self.invoke(ctx, argv)
         # Hadolint exits 1 when it finds issues. Empty stdout is a real failure.
         if not result.stdout.strip():
             if result.returncode == 0:

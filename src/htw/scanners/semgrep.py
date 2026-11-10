@@ -95,7 +95,7 @@ class Semgrep(ToolAdapter):
         for pattern in ctx.asset.exclude:
             argv += ["--exclude", pattern]
         argv.append(".")
-        result = ctx.runner.run(argv, cwd=ctx.root, extra_env={"SEMGREP_SEND_METRICS": "off"})
+        result = self.invoke(ctx, argv, extra_env={"SEMGREP_SEND_METRICS": "off"})
         if not result.stdout.strip():
             raise self._fail(result)
         report = as_dict(parse_json(self.name, result.stdout))

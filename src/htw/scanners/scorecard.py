@@ -34,7 +34,7 @@ class Scorecard(ToolAdapter):
 
     def scan(self, ctx: ScanContext) -> list[Finding]:
         argv = ["scorecard", "--local", ".", "--format", "json", "--show-details"]
-        result = ctx.runner.run(argv, cwd=ctx.root)
+        result = self.invoke(ctx, argv)
         if not result.stdout.strip():
             raise self._fail(result)
         report = as_dict(parse_json(self.name, result.stdout))

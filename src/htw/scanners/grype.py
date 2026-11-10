@@ -38,9 +38,9 @@ class Grype(ToolAdapter):
             source = [f"sbom:{sbom}"]
         else:
             source = ["dir:.", *anchore_excludes(ctx.root, ctx.asset.exclude)]
-        result = ctx.runner.run(
+        result = self.invoke(
+            ctx,
             ["grype", *source, "-o", "json", "-q"],
-            cwd=ctx.root,
             extra_env={"GRYPE_CHECK_FOR_APP_UPDATE": "false"},
         )
         if result.returncode != 0 or not result.stdout.strip():

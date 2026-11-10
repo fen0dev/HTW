@@ -106,6 +106,8 @@ class RunnerSettings:
     timeout_seconds: int = 900
     max_output_mb: int = 256
     env_passthrough: tuple[str, ...] = ()
+    # auto: wrap scanners with bwrap when it works. off: run them as this user.
+    sandbox: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -598,6 +600,19 @@ def _parse_asset(
     return asset
 
 
+def _sandbox_mode(section: _Section) -> str:
+    """`off` is a boolean in YAML 1.1, so accept that spelling as well as the string."""
+    value = section.get("sandbox", "auto")
+    if value is False:
+        value = "off"
+    if value not in ("auto", "off"):
+        raise ConfigError(
+            f"{section.where}: `sandbox` must be auto or off (got {value!r}). "
+            "off runs scanners as the current user; it does not add paths or targets."
+        )
+    return str(value)
+
+
 def load_config(path: str | Path) -> Config:
     """Load and validate the scope file. Raises ConfigError with an actionable message."""
     config_path = Path(path).expanduser().resolve()
@@ -635,6 +650,7 @@ def load_config(path: str | Path) -> Config:
         timeout_seconds=runner_section.integer("timeout_seconds", 900, minimum=1),
         max_output_mb=runner_section.integer("max_output_mb", 256, minimum=1),
         env_passthrough=runner_section.strings("env_passthrough"),
+        sandbox=_sandbox_mode(runner_section),
     )
     runner_section.finish()
 

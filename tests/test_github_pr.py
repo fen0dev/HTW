@@ -26,7 +26,7 @@ class RecordingRunner:
     def which(self, binary: str) -> str | None:
         return f"/fake/{binary}"
 
-    def run(self, argv, cwd, timeout_seconds=None, extra_env=None) -> CommandResult:
+    def run(self, argv, cwd, timeout_seconds=None, extra_env=None, **_kwargs) -> CommandResult:
         argv = list(argv)
         self.calls.append((argv, Path(cwd)))
         if argv[:3] == ["gh", "pr", "view"]:
@@ -77,7 +77,7 @@ def test_a_non_draft_pull_request_is_closed(tmp_path: Path) -> None:
     )
     runner = RecordingRunner()
 
-    def run(argv, cwd, timeout_seconds=None, extra_env=None):
+    def run(argv, cwd, timeout_seconds=None, extra_env=None, **_kwargs):
         argv = list(argv)
         runner.calls.append((argv, Path(cwd)))
         if argv[:3] == ["gh", "pr", "view"]:

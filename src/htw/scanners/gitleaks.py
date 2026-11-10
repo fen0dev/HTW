@@ -54,7 +54,9 @@ class Gitleaks(ToolAdapter):
         version = self.version(ctx.runner, ctx.root)
         with tempfile.TemporaryDirectory(prefix="htw-gitleaks-") as scratch:
             report = Path(scratch) / "report.json"
-            result = ctx.runner.run(self.command(version, ctx.root, history, report), cwd=ctx.root)
+            result = self.invoke(
+                ctx, self.command(version, ctx.root, history, report), writable=(Path(scratch),)
+            )
             if result.returncode != 0 or not report.exists():
                 raise self._fail(result)
             entries = as_list(read_json_file(self.name, report))

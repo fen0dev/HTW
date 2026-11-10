@@ -60,6 +60,7 @@ class Orchestrator:
             env_passthrough=config.runner.env_passthrough,
             kill_switch=self.kill_switch,
             environ=environ,
+            sandbox=config.runner.sandbox,
         )
         self.audit = AuditLog(config.audit_path)
         self._environ = environ
@@ -156,6 +157,11 @@ class Orchestrator:
 
         run.profile = detect_stack(asset.path, asset.exclude)
         run.plans = self._plans(asset, run.profile)
+        if hasattr(self.runner, "ensure_sandbox"):
+            self.runner.ensure_sandbox()
+            note = getattr(self.runner, "sandbox_note", None)
+            if note:
+                run.notes.append(note)
         run.report_dir = self.config.reports_dir / asset.id / run_id
         run.report_dir.mkdir(parents=True, exist_ok=True)
 
@@ -243,6 +249,7 @@ class Orchestrator:
                     status=outcome.status,
                     findings=len(outcome.findings),
                     detail=outcome.message,
+                    sandboxed=getattr(self.runner, "last_sandboxed", False),
                 )
                 if run.status == STOPPED:
                     run.notes.append(

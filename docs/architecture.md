@@ -108,8 +108,11 @@ automation, version control.
 
 `htw detect` prints the profile and the resulting scan plan without running a scanner.
 
-A CI system the detector recognizes and no wrapped tool covers is reported as a gap
-(`cicd:uncovered:<name>`). Cloud providers detected from files are not contacted:
+A CI system the detector recognizes and no wrapped tool covers is reported as
+`no wrapped scanner: <name>`. That line means HTW has no scanner for it. It is not
+an invitation to install Checkov: Checkov already covers only the systems named in
+`scanners/targets.py` (GitHub Actions, GitLab CI, Azure Pipelines, Bitbucket
+Pipelines, CircleCI). Cloud providers detected from files are not contacted:
 without infrastructure files, the infrastructure agent says so and stops.
 
 ## Scanner agents and tool adapters
@@ -214,9 +217,11 @@ is closed and the failure is recorded. Code patches stay `public_safe: false`.
 
 ## Differences from the plan
 
-- Scanners run as local binaries, not as containers pinned by digest. The runner
-  scrubs the environment and enforces timeouts and output limits, but does not isolate
-  the filesystem or the network. See [guardrails.md](guardrails.md).
+- Scanners run as local binaries, not as containers pinned by digest. When
+  bubblewrap is usable they see the asset read-only, a private home directory, and
+  no other path except a cache named in `env_passthrough` and the report directory.
+  Tools whose network note is "none" also lose the network. There is no egress
+  allowlist of addresses. See [guardrails.md](guardrails.md).
 - Results go to files (Markdown, SARIF, JSON). Posting to an issue tracker or chat is
   not implemented.
 - Stack detection is a component of its own, which the plan did not single out.

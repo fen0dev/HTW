@@ -155,12 +155,17 @@ def needed(profile: StackProfile, category: str) -> dict[str, str]:
 
 
 def uncovered_pipelines(profile: StackProfile) -> dict[str, str]:
-    """CI systems the detector recognized and none of the wrapped tools scan."""
+    """CI systems the detector recognized and none of the wrapped tools scan.
+
+    The value is a stable prefix plus the detected name. Reporting uses the prefix
+    so the gap is not described as a missing installation: installing Checkov does
+    not cover these systems, and HTW does not invent a scanner for them.
+    """
     covered = {name for target in PIPELINE_TARGETS for name in target.names}
     extra: dict[str, str] = {}
     for name in sorted(profile.names(CI_CD) - covered):
         slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in name).strip("-")
-        extra[f"cicd:uncovered:{slug}"] = f"{name} pipelines"
+        extra[f"cicd:uncovered:{slug}"] = f"no wrapped scanner: {name}"
     return extra
 
 

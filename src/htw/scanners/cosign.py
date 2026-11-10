@@ -75,7 +75,7 @@ class Cosign(ToolAdapter):
                 "cosign", "verify-blob", "--offline", "--key", "cosign.pub",
                 "--signature", signature, blob,
             ]  # fmt: skip
-            result = ctx.runner.run(argv, cwd=ctx.root)
+            result = self.invoke(ctx, argv)
             if result.returncode == 0:
                 continue
             findings.append(

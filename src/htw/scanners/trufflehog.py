@@ -31,8 +31,8 @@ class TruffleHog(ToolAdapter):
     def scan(self, ctx: ScanContext) -> list[Finding]:
         history = bool(ctx.settings.options.get("history", True)) and (ctx.root / ".git").exists()
         source = ["git", ctx.root.as_uri()] if history else ["filesystem", str(ctx.root)]
-        result = ctx.runner.run(
-            ["trufflehog", *source, "--json", "--no-verification", "--no-update"], cwd=ctx.root
+        result = self.invoke(
+            ctx, ["trufflehog", *source, "--json", "--no-verification", "--no-update"]
         )
         if result.returncode != 0:
             raise self._fail(result)
