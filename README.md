@@ -159,6 +159,17 @@ htw scan        # scan, and write the report
 The report is at `.htw/reports/<asset>/<run>/report.md`. Run `htw scan` again and it
 reports nothing new.
 
+Read the short local digest of that finished scan:
+
+```bash
+htw digest
+```
+
+This reads the latest `summary.json` and `findings.sarif` already written for each
+declared asset and writes `.htw/digest.md`. Open that file in an editor. It counts
+what changed, what is still open by priority and by asset, and what was not covered.
+HTW does not upload the digest and does not start a server.
+
 ## The scope file
 
 `htw.yaml` is the allowlist. A commented example with every option is in
@@ -201,6 +212,7 @@ assets:
 | `htw doctor` | List the scanners, whether each is installed, and what each sends over the network. |
 | `htw detect [--asset ID] [--json]` | Show the detected stack and the scan plan. Runs no scanner, writes nothing. |
 | `htw scan [--asset ID] [--fail-on SEVERITY] [--strict]` | Scan and report. |
+| `htw digest [--asset ID]` | Write `.htw/digest.md` from the latest finished scan. No upload. |
 | `htw audit-verify` | Verify the hash chain of the audit log. |
 
 All commands take `-c PATH` to use a scope file other than `./htw.yaml`.
@@ -223,6 +235,7 @@ Under `.htw/` (configurable with `state_dir`):
 
 ```
 .htw/
+  digest.md                        written by `htw digest` from the reports below
   state.db                         findings and their history
   audit.jsonl                      who ran what, when, on which asset
   reports/<asset>/<run>/
@@ -403,8 +416,11 @@ What this release does not do. Each item is planned unless noted.
   images by digest and does not restrict egress to a list of addresses. Where
   `bwrap` is missing, scanners run as this user and the report says so. See
   [docs/guardrails.md](docs/guardrails.md#current-limits).
-- **Reports go to files.** No issue tracker or chat integration. Draft pull
-  requests are GitHub only, and only when `fixes.pull_requests` is true.
+- **Reports go to files.** `htw digest` reads those files and writes `digest.md`
+  beside them. No issue tracker, chat, or dashboard server. Draft pull requests
+  are GitHub only, and only when `fixes.pull_requests` is true. The digest does
+  not compute time to resolution or a false-positive rate: the written reports
+  do not carry them.
 - **Priority starts from severity and asset criticality**, then rises one step
   when a CVE is in the CISA KEV catalog and one more when its EPSS score is at
   least 0.10, capped at P0. Both steps require a feed fetched during the run or

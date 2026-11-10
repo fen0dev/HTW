@@ -72,6 +72,7 @@ src/htw/
     triage.py            deduplicate, rank, optional model
     orchestrator.py      the pipeline
     reporting.py         report.md, SARIF, summary.json
+    digest.py            local digest read from those reports
     fixer.py             fix proposals
   integrations/
     pull_requests.py     proposal files and the draft pull request rules
@@ -204,6 +205,13 @@ Under `<state_dir>/reports/<asset>/<run>/`:
   scripts.
 - `sbom.cdx.json`: CycloneDX SBOM, when Syft is installed.
 - `proposals/`: fix proposals, when enabled.
+
+`htw digest` reads the latest `summary.json` and `findings.sarif` for each declared
+asset and writes `<state_dir>/digest.md`. The file counts what changed, what is still
+open by priority and by asset, and which checks were not covered. It is for the
+operator to open locally. Nothing is uploaded and no server is started. Time to
+resolution and a false-positive rate are not in the reports, so the digest does not
+invent them.
 
 ## Fix proposals
 
