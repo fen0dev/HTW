@@ -69,8 +69,8 @@ class Gosec(ToolAdapter):
         load_errors: list[str] = []
         files = 0
         for module in modules:
-            result = ctx.runner.run(
-                ["gosec", "-fmt", "json", "-quiet", "-no-fail", "./..."], cwd=module
+            result = self.invoke(
+                ctx, ["gosec", "-fmt", "json", "-quiet", "-no-fail", "./..."], cwd=module
             )
             if not result.stdout.strip():
                 load_errors.append(result.stderr_tail or f"no output for {module.name}")

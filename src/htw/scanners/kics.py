@@ -41,7 +41,7 @@ class Kics(ToolAdapter):
             "--report-formats", "json", "--output-path", str(output),
             "--disable-secrets", "--silent",
         ]  # fmt: skip
-        result = ctx.runner.run(argv, cwd=ctx.root)
+        result = self.invoke(ctx, argv, writable=(output,))
         report_path = next(output.glob("*.json"), None)
         if report_path is None:
             raise self._fail(result, "wrote no JSON report")

@@ -47,7 +47,7 @@ class Checkov(ToolAdapter):
             "--download-external-modules", "false",
             "--skip-results-upload",
         ]  # fmt: skip
-        result = ctx.runner.run(argv, cwd=ctx.root)
+        result = self.invoke(ctx, argv)
         if not result.stdout.strip():
             raise self._fail(result)
         payload = parse_json(self.name, result.stdout)

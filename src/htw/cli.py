@@ -11,7 +11,7 @@ from pathlib import Path
 from htw import __version__
 from htw.agents import AGENTS
 from htw.agents.orchestrator import Orchestrator
-from htw.agents.reporting import console_summary
+from htw.agents.reporting import console_summary, gap_notice
 from htw.agents.run import INCOMPLETE, REFUSED, STOPPED, AssetRun
 from htw.core.audit import AuditLog
 from htw.core.config import DEFAULT_CONFIG_NAME, Config, load_config
@@ -147,6 +147,7 @@ def cmd_doctor(arguments: argparse.Namespace) -> int:
             print(f"            network: {adapter.network}")
         print()
     print("A missing scanner is skipped with a warning; the scan still runs with the rest.")
+    print(runner.sandbox_status())
     return EXIT_OK
 
 
@@ -195,7 +196,7 @@ def cmd_detect(arguments: argparse.Namespace) -> int:
             for adapter in plan.missing:
                 print(f"      missing: {adapter.missing_message()}")
             for gap in sorted(set(plan.uncovered.values())):
-                print(f"      not covered: {gap}")
+                print(f"      {gap_notice(gap)}")
     if arguments.json:
         print(json.dumps(output, indent=2, sort_keys=True))
     return exit_code

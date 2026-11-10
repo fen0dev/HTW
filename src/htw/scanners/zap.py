@@ -33,7 +33,7 @@ class Zap(ToolAdapter):
         url = approved_staging_url(ctx)
         report = ctx.artifacts_dir / "zap-baseline.json"
         argv = ["zap-baseline.py", "-t", url, "-J", str(report), "-I"]
-        result = ctx.runner.run(argv, cwd=ctx.root)
+        result = self.invoke(ctx, argv)
         if not report.is_file():
             if result.returncode not in (0, 1, 2) or not result.stdout.strip():
                 raise self._fail(result)

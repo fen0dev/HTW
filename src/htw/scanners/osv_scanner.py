@@ -78,7 +78,7 @@ class OsvScanner(ToolAdapter):
 
     def scan(self, ctx: ScanContext) -> list[Finding]:
         version = self.version(ctx.runner, ctx.root)
-        result = ctx.runner.run(self.command(version), cwd=ctx.root)
+        result = self.invoke(ctx, self.command(version))
         if result.returncode == EXIT_NO_PACKAGES:
             return []
         if result.returncode not in (0, EXIT_VULNERABILITIES) or not result.stdout.strip():

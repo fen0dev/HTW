@@ -70,7 +70,7 @@ class Zizmor(ToolAdapter):
 
     def scan(self, ctx: ScanContext) -> list[Finding]:
         argv = ["zizmor", "--offline", "--format", "json", "--no-progress", "."]
-        result = ctx.runner.run(argv, cwd=ctx.root)
+        result = self.invoke(ctx, argv)
         if not result.stdout.strip():
             if result.returncode == 0:
                 return []

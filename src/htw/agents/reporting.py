@@ -34,6 +34,21 @@ MAX_DETAILED = 50
 MAX_TABLE_ROWS = 200
 
 
+def gap_notice(gap: str) -> str:
+    """One console line. Unsupported CI systems are not described as a missing install."""
+    if gap.startswith("no wrapped scanner: "):
+        name = gap.split(": ", 1)[1]
+        return f"not scanned: {name} (no wrapped scanner)"
+    return f"not covered: {gap}"
+
+
+def gap_markdown(gap: str) -> str:
+    if gap.startswith("no wrapped scanner: "):
+        name = gap.split(": ", 1)[1]
+        return f"{md(name)}: detected. No wrapped scanner reads it, so HTW does not scan it."
+    return f"{md(gap)}: no installed scanner covers this. See the Scanners table."
+
+
 def _tool_homepages() -> dict[str, str]:
     return {adapter.name: adapter.homepage for agent in AGENTS for adapter in agent.adapters}
 
@@ -229,7 +244,7 @@ def render_markdown(run: AssetRun) -> str:
     if gaps:
         lines += ["", "### Not covered", ""]
         for gap in gaps:
-            lines.append(f"- {md(gap)}: no installed scanner covers this. See the Scanners table.")
+            lines.append(f"- {gap_markdown(gap)}")
 
     if run.triage:
         lines += ["", "## Triage", ""]
@@ -411,7 +426,7 @@ def console_summary(run: AssetRun) -> str:
         elif outcome.status == STATUS_ERROR:
             lines.append(f"  error: {outcome.tool}: {outcome.message}")
     for gap in run.gaps:
-        lines.append(f"  not covered: {gap}")
+        lines.append(f"  {gap_notice(gap)}")
     for warning in run.decision.warnings:
         lines.append(f"  warning: {warning}")
     if run.report_dir is not None:

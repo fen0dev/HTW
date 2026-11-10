@@ -20,7 +20,7 @@ class Bandit(ToolAdapter):
         return {"sast:Python"} if "Python" in profile.languages else set()
 
     def scan(self, ctx: ScanContext) -> list[Finding]:
-        result = ctx.runner.run(["bandit", "-r", ".", "-f", "json", "-q"], cwd=ctx.root)
+        result = self.invoke(ctx, ["bandit", "-r", ".", "-f", "json", "-q"])
         if result.returncode not in (0, 1) or not result.stdout.strip():
             raise self._fail(result)
         report = as_dict(parse_json(self.name, result.stdout))

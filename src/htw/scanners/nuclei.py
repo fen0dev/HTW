@@ -41,7 +41,7 @@ class Nuclei(ToolAdapter):
     def scan(self, ctx: ScanContext) -> list[Finding]:
         url = approved_staging_url(ctx)
         argv = ["nuclei", "-u", url, "-jsonl", "-silent", "-disable-update-check"]
-        result = ctx.runner.run(argv, cwd=ctx.root)
+        result = self.invoke(ctx, argv)
         if result.returncode not in (0, 1) and not result.stdout.strip():
             raise self._fail(result)
         findings = []

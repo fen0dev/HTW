@@ -47,7 +47,8 @@ class Syft(ToolAdapter):
     def scan(self, ctx: ScanContext) -> list[Finding]:
         cyclonedx = ctx.artifacts_dir / SBOM_CYCLONEDX
         native = ctx.artifacts_dir / SBOM_SYFT
-        result = ctx.runner.run(
+        result = self.invoke(
+            ctx,
             [
                 "syft",
                 "scan",
@@ -61,7 +62,6 @@ class Syft(ToolAdapter):
                 "-q",
                 *anchore_excludes(ctx.root, ctx.asset.exclude),
             ],
-            cwd=ctx.root,
             extra_env={"SYFT_CHECK_FOR_APP_UPDATE": "false"},
         )
         if result.returncode != 0 or not cyclonedx.exists():

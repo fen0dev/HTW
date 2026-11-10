@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
@@ -86,9 +87,43 @@ class ToolAdapter(ABC):
     def available(self, runner: ToolRunner) -> bool:
         return runner.which(self.binary) is not None
 
+    @property
+    def isolates_network(self) -> bool:
+        """True when this tool's declared network use is none, so the sandbox drops the network."""
+        text = self.network.strip().lower()
+        return text == "none" or text.startswith("none;") or text.startswith("none ")
+
+    def invoke(
+        self,
+        ctx: ScanContext,
+        argv: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        extra_env: Mapping[str, str] | None = None,
+        writable: Sequence[Path] = (),
+        timeout_seconds: int | None = None,
+    ) -> CommandResult:
+        """Run the scanner on the asset. The asset stays read-only; the home directory is not mounted."""
+        work = cwd or ctx.root
+        reports = (ctx.artifacts_dir, *writable)
+        return ctx.runner.run(
+            argv,
+            cwd=work,
+            extra_env=extra_env,
+            timeout_seconds=timeout_seconds,
+            offline=self.isolates_network,
+            writable=reports,
+            read_root=ctx.root,
+            sandbox=True,
+        )
+
     def version(self, runner: ToolRunner, cwd: Path) -> str | None:
         try:
-            result = runner.run([self.binary, *self.version_args], cwd=cwd, timeout_seconds=60)
+            # Version probes must not mount the current directory: `htw doctor` may be
+            # started from the operator's home.
+            result = runner.run(
+                [self.binary, *self.version_args], cwd=cwd, timeout_seconds=60, sandbox=False
+            )
         except ToolError:
             return None
         match = _VERSION_RE.search(result.stdout + "\n" + result.stderr)

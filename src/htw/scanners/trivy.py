@@ -38,7 +38,7 @@ class Trivy(ToolAdapter):
             if cleaned and (ctx.root / cleaned).is_dir():
                 argv += ["--skip-dirs", cleaned]
         argv.append(".")
-        result = ctx.runner.run(argv, cwd=ctx.root, extra_env={"TRIVY_SKIP_VERSION_CHECK": "true"})
+        result = self.invoke(ctx, argv, extra_env={"TRIVY_SKIP_VERSION_CHECK": "true"})
         if result.returncode != 0 or not result.stdout.strip():
             raise self._fail(result)
         report = as_dict(parse_json(self.name, result.stdout))

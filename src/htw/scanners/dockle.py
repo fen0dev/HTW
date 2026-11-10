@@ -69,7 +69,7 @@ class Dockle(ToolAdapter):
         findings = []
         for archive in archives:
             argv = ["dockle", "--input", archive, "--format", "json", "--exit-code", "0"]
-            result = ctx.runner.run(argv, cwd=ctx.root)
+            result = self.invoke(ctx, argv)
             if not result.stdout.strip():
                 raise self._fail(result)
             report = as_dict(parse_json(self.name, result.stdout))

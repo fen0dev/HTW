@@ -38,6 +38,10 @@ triage:
 runner:
   timeout_seconds: 900     # per scanner invocation
   max_output_mb: 256       # a scanner producing more output than this is stopped
+  # auto wraps each scanner with bubblewrap when it works. "off" leaves the
+  # process as this user. Neither value widens the asset allowlist. Quote off:
+  # bare off is a boolean in YAML 1.1, and both spellings are accepted.
+  sandbox: auto
   # Scanners run with a scrubbed environment. List here the extra variables they need,
   # for example a cache location. Never list credentials you do not want them to see.
   env_passthrough: []

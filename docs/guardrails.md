@@ -122,9 +122,13 @@ Each scanner is a child process started without a shell, with:
   proxy and CA settings, cache locations) plus what `runner.env_passthrough` names.
   Tokens in the operator's shell or CI job do not reach the scanners;
 - a timeout and an output size limit, after which the whole process group is killed;
-- no standard input.
+- no standard input;
+- when bubblewrap is usable, a private mount namespace: the asset read-only, a
+  fresh home directory, and the network dropped for tools that do not use it.
+  `git` and `gh` are started without that wrapper so they can use the login the
+  operator already has. HTW does not create that login.
 
-Code: `core/runner.py`.
+Code: `core/runner.py`. `htw doctor` prints whether the sandbox is active.
 
 ### Kill switch
 
@@ -187,10 +191,15 @@ notice not to paste it into public issues, pull requests or chats.
 These are the gaps between the rules above and what phase 1 enforces. They are
 listed here so that nobody has to discover them.
 
-- **No filesystem or network sandbox.** Scanners run as local processes with the
-  permissions of the user running HTW. The plan calls for containers pinned by digest
-  with network egress limited to the declared targets; that is not implemented. Until
-  it is, run HTW as an unprivileged user, on a machine or CI runner that holds no
+- **The process sandbox is bubblewrap, not the container the plan describes.**
+  When `bwrap` can start, a scanner may read the asset and may write only the
+  report directory (and a cache directory named in `runner.env_passthrough`). The
+  asset is mounted read-only. The home directory is not mounted, so an existing
+  `gh` or cloud login is not visible to the scanner. Tools that declare no network
+  use lose the network. `runner.sandbox: off` disables this. The plan's
+  digest-pinned images and an egress allowlist of addresses are not implemented.
+  Where bubblewrap cannot start, the report says the scanners ran as this user.
+  Run HTW as an unprivileged user, on a machine or CI runner that holds no
   credentials it does not need.
 - **Scanner binaries are not verified.** HTW runs whatever `PATH` resolves. Install
   scanners from their official releases and verify the checksums.

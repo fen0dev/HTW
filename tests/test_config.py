@@ -66,6 +66,7 @@ def test_loads_a_complete_scope_file(tmp_path: Path) -> None:
     assert config.store_path == tmp_path / "state" / "state.db"
     assert config.runner.timeout_seconds == 60
     assert config.runner.env_passthrough == ("GRYPE_DB_CACHE_DIR",)
+    assert config.runner.sandbox == "auto"
     assert len(config.config_hash) == 64
 
     asset = config.asset("payments-api")
