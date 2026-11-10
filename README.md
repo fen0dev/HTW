@@ -1,75 +1,96 @@
-# HTW - Hack The Web
+# HTW
 
-Security scanning agents that an engineering team runs on its **own** systems. HTW
-detects what a codebase is made of, runs the established open-source scanners that
-apply to it, and on every recurring scan reports only what changed: what is new, what
-came back, what was resolved. It can also propose fixes for a person to review. It
-never applies them.
+HTW scans source repositories and directories that you own, or that someone has
+authorized you to test. It looks at the files, picks the open-source scanners that
+fit that stack, and writes a local report of what changed since the last run. It
+can also leave fix proposals for a person to review. It does not apply them, and it
+does not open a ticket, a chat message, or a dashboard.
 
 > **Authorized use only.** Only scan systems you own or are explicitly authorized to
-> test. HTW refuses to scan anything that is not declared, with a named authorizer and
-> an expiry date, in its scope file. That check protects you from mistakes; it does
-> not make an unauthorized scan legitimate. Scanning systems without permission may be
-> illegal where you are.
+> test. HTW refuses anything that is not declared, with a named authorizer and an
+> expiry date, in `htw.yaml`. That check stops accidents. It does not make an
+> unauthorized scan legitimate.
 
-**Status: phase 1 (alpha).** This release covers static analysis of source
-repositories and directories: dependencies and SBOM, secrets, static code
-analysis, container files, infrastructure as code, and CI/CD workflow files.
-Runtime tests stay off unless a person has approved one staging URL. It is
-report-only by default. See [Limitations](#limitations) for what it
-does not do yet.
+This is an alpha. It runs on Linux and macOS with Python 3.11 or later. Windows is
+untested.
 
-## What phase 1 does
+## What a scan does
 
-- **Scope and authorization first.** A scope file is the allowlist. Every asset needs
-  an owner and an authorization record that expires. For git checkouts, HTW verifies
-  before every scan that the checkout points to the remote you declared.
-- **Automatic stack detection.** Languages, package managers, containers,
-  infrastructure as code, cloud providers and CI/CD systems are detected from the
-  files, and the detected stack decides which scanners run.
-- **Scanner agents**, each a thin wrapper around tools you may already use. Nothing
-  here builds an image, applies infrastructure, or contacts a cloud account:
+You list the assets in `htw.yaml`. That file is the allowlist: a path that is not
+listed is out of scope, and `htw scan` will not accept an arbitrary path or URL on
+the command line. Each asset needs an owner and an authorization record with a
+start date and an expiry date. For a git checkout (`type: repository`), HTW also
+checks, before every scan, that the checkout's remote matches `ownership.git_remote`.
+A plain directory has no remote to check, so the authorization record is the only
+basis for scanning it.
 
-  | Agent | What it finds | Tools, in order of preference |
-  |---|---|---|
-  | Dependencies and SBOM | Known vulnerabilities in dependencies; a CycloneDX SBOM | Syft, then Grype, OSV-Scanner or Trivy |
-  | Secrets | Credentials in files and in git history | Gitleaks or TruffleHog |
-  | Static analysis (SAST) | Unsafe code patterns | Semgrep; Bandit (Python) and gosec (Go) as fallbacks |
-  | Containers | Dockerfile and Compose misconfiguration, from the files only | Hadolint, then Trivy config or Checkov. Dockle is opt-in and only reads a local `.tar` |
-  | Infrastructure as code | Terraform, CloudFormation, Kubernetes, Ansible and the other formats the detector already names | Checkov, then Trivy config, KICS or kube-linter |
-  | CI/CD | Workflow misconfiguration for the CI systems the detector recognizes | zizmor (GitHub Actions, offline) or Checkov. OpenSSF Scorecard and cosign are opt-in |
-  | Runtime (DAST) | Passive checks against one approved staging URL | ZAP baseline. Nuclei is opt-in. Refused unless a current L2 approval names that exact URL |
+HTW then detects the stack from the files: languages, package managers, Dockerfiles,
+infrastructure-as-code, and CI configuration. The detected stack decides which
+agents run. Each agent is a wrapper around tools you install yourself. HTW bundles
+none of them. When several tools can do one job, it tries them in order and uses
+the first that is installed and still adds coverage.
 
-- **Only what changed.** Findings get a stable fingerprint that survives code moving
-  around, so a nightly scan tells you what is new, reappeared or resolved instead of
-  repeating the whole list.
-- **Normalized output.** One Markdown report and one SARIF 2.1.0 file per run,
-  whatever mix of scanners produced the findings.
-- **Fix proposals for human review** (off by default): the target version for a
-  vulnerable dependency, a patch when the scanner supplies a small safe edit, and,
-  only when you turn it on, a draft pull request. Never applied, never merged.
-- **Guardrails throughout**: kill switch, scan windows and rate limits, secrets
-  redacted at the source, scanners run with a scrubbed environment and timeouts, a
-  tamper-evident audit log, suppressions that must be justified and expire.
+Dependencies and SBOMs use Syft, then Grype, OSV-Scanner, or Trivy. Secrets use
+Gitleaks, then TruffleHog. Static analysis uses Semgrep, then Bandit for Python and
+gosec for Go. Container files use Hadolint, then Trivy `config` or Checkov. Those
+tools read the Dockerfile and Compose file in the checkout. They do not pull or run
+an image. Dockle runs only when `scanners.container.tools` lists `dockle`. An
+explicit `tools` list replaces the automatic choice for that agent, and Dockle is
+only given a local `.tar`. Infrastructure as code uses Checkov, then Trivy `config`,
+KICS, or kube-linter, again on the files only. Nothing in this release logs into a
+cloud account or a cluster.
 
-**What "agents" means here.** The agents are deterministic: an orchestrator and one
-scanner agent per kind of check, behind a common interface. Triage (deduplicate,
-rank, drop obvious false positives) is on by default and does not call a model.
-An optional model can mark a finding as a likely false positive, and it stays off
-until the scope file names a provider and an environment variable that already
-holds the key. HTW never stores that key and never sends a secret value or a
-source snippet. Deep code review and generated fixes beyond a scanner-supplied
-patch are not in this release.
+CI coverage is narrower than detection. zizmor reads GitHub Actions workflows and
+is always passed `--offline`. Checkov reads GitHub Actions, GitLab CI, Azure
+Pipelines, Bitbucket Pipelines, and CircleCI. Other systems the detector
+recognizes, including Jenkins, Tekton, Travis CI, Drone, Buildkite, AWS CodeBuild,
+and Argo CD, are reported as a gap: `no wrapped scanner`. Installing another copy
+of Checkov does not close that gap, and HTW does not add a scanner for them.
+`--strict` makes any such gap fail the run.
+
+A missing scanner does not fail a normal run. HTW prints the install command, tries
+the next tool, finishes the rest of the scan, and lists what was not covered.
+
+Every finding gets a stable id (`htw1:…`) that survives reformatting and, for a
+dependency, stays the same until the advisory no longer applies. The next scan
+compares those ids with `.htw/state.db` and reports what is new, what came back,
+and what was resolved. The same findings are written as SARIF 2.1.0. The id is in
+`partialFingerprints["htw/v1"]` and the comparison with the previous scan is in
+`baselineState`.
+
+Priority starts from the scanner severity and the asset's `criticality`. When a
+finding already carries a CVE id, and `exploitability.enabled` is true (the
+default), the run downloads the public CISA Known Exploited Vulnerabilities catalog
+and the public FIRST EPSS scores for those ids only. There is no API key. The
+response is cached under the state directory for 24 hours. A CVE in the KEV catalog
+raises priority one step. An EPSS score of at least 0.10 raises it one more step.
+The two steps stop at P0. If a feed cannot be fetched and the cache is missing or
+older than 24 hours, priority is left where severity and criticality put it. A low
+score does not lower it. Reachability is not scored.
+
+Local triage then runs. It drops static findings under vendored and virtualenv
+trees, drops a secret finding in documentation when the context looks like a
+placeholder, and collapses two tools' reports of the same CWE at the same line, or
+the same advisory on the same package. It does not call a model unless you turn
+that on, as described below.
+
+When `bwrap` is available and `runner.sandbox` is `auto` (the default), each
+scanner process is wrapped with bubblewrap. The asset is mounted read-only, the
+home directory is not mounted, and a tool that declares no network use loses the
+network. `git` and `gh` are not wrapped, so a draft pull request can still use a
+login you already have. If bubblewrap is missing or cannot start, the scan
+continues and the report says the scanners ran as the current user. This is not a
+digest-pinned container and not an address allowlist. Set `runner.sandbox: "off"`
+to skip the wrap. Quote `off`: a bare `off` is a boolean in YAML 1.1, and both
+spellings are accepted.
 
 ## Install
-
-HTW needs Python 3.11 or later, on Linux or macOS.
 
 ```bash
 pipx install git+https://github.com/fen0dev/HTW.git
 ```
 
-or, from a clone, with dependencies pinned by hash:
+Or, from a clone, with the runtime dependency pinned by hash:
 
 ```bash
 git clone https://github.com/fen0dev/HTW.git && cd HTW
@@ -78,67 +99,55 @@ pip install --require-hashes -r requirements.txt
 pip install --no-deps .
 ```
 
-Check it:
+Check the install:
 
 ```bash
 htw --version
-htw doctor      # shows which scanners are installed
+htw doctor
 ```
 
-### Install the scanners
+`htw doctor` lists every wrapped scanner, whether it is on `PATH`, and what it
+sends over the network. It also prints whether bubblewrap will wrap scanner
+processes on this machine.
 
-HTW wraps external scanners and bundles none of them. Install the ones you want.
-Where several tools can do the same job, HTW prefers Grype, then OSV-Scanner, then
-Trivy; Gitleaks, then TruffleHog; Semgrep, then Bandit and gosec; Hadolint, then
-Trivy config or Checkov; Checkov, then Trivy config, KICS or kube-linter; and
-zizmor, then Checkov, for GitHub Actions. Opt-in tools (Dockle, Scorecard, cosign,
-Nuclei) are listed by `htw doctor` and run only when `tools:` names them.
+Install the scanners you want from their own releases and check the published
+checksums. HTW runs whatever `PATH` resolves and does not verify those binaries.
+A practical minimum is Syft, Grype, Gitleaks, and Semgrep, plus zizmor when the
+repository uses GitHub Actions.
 
-| Tool | Agent | Install | Tested with |
-|---|---|---|---|
-| [Syft](https://github.com/anchore/syft) | Dependencies and SBOM | `brew install syft`, or a [release binary](https://github.com/anchore/syft/releases) | 1.57.1 |
-| [Grype](https://github.com/anchore/grype) | Dependencies and SBOM | `brew install grype`, or a [release binary](https://github.com/anchore/grype/releases) | 0.121.3 |
-| [OSV-Scanner](https://github.com/google/osv-scanner) | Dependencies and SBOM | `brew install osv-scanner`, or a [release binary](https://github.com/google/osv-scanner/releases) | 2.7.1 |
-| [Trivy](https://github.com/aquasecurity/trivy) | Dependencies and SBOM | `brew install trivy`, or a [release binary](https://github.com/aquasecurity/trivy/releases) | 0.76.2 |
-| [Gitleaks](https://github.com/gitleaks/gitleaks) | Secrets | `brew install gitleaks`, or a [release binary](https://github.com/gitleaks/gitleaks/releases) | 8.30.1 |
-| [TruffleHog](https://github.com/trufflesecurity/trufflehog) | Secrets | `brew install trufflehog`, or a [release binary](https://github.com/trufflesecurity/trufflehog/releases) | 3.99.8 |
-| [Semgrep](https://github.com/semgrep/semgrep) | Static analysis | `pipx install semgrep` or `brew install semgrep` | 1.185.0 |
-| [Bandit](https://github.com/PyCQA/bandit) | Static analysis (Python) | `pipx install bandit` | 1.9.4 |
-| [gosec](https://github.com/securego/gosec) | Static analysis (Go) | `go install github.com/securego/gosec/v2/cmd/gosec@latest` (also needs the Go toolchain at scan time) | 2.30.0 |
-| [Hadolint](https://github.com/hadolint/hadolint) | Containers | `brew install hadolint`, or a [release binary](https://github.com/hadolint/hadolint/releases) | — |
-| [Trivy](https://github.com/aquasecurity/trivy) `config` | Containers, infrastructure | same binary as above; HTW passes `--skip-db-update` and never `trivy image` | 0.76.2 |
-| [Checkov](https://github.com/bridgecrewio/checkov) | Containers, infrastructure, CI/CD | `pipx install checkov` | — |
-| [KICS](https://github.com/Checkmarx/kics) | Infrastructure | `brew install kics`, or a [release binary](https://github.com/Checkmarx/kics/releases) | — |
-| [kube-linter](https://github.com/stackrox/kube-linter) | Kubernetes manifests | `brew install kube-linter`, or a [release binary](https://github.com/stackrox/kube-linter/releases) | — |
-| [zizmor](https://github.com/zizmorcore/zizmor) | GitHub Actions | `brew install zizmor`, or a [release binary](https://github.com/zizmorcore/zizmor/releases) | 1.32.0 |
+| Tool | Install | Tested with |
+|---|---|---|
+| [Syft](https://github.com/anchore/syft) | `brew install syft`, or a [release binary](https://github.com/anchore/syft/releases) | 1.57.1 |
+| [Grype](https://github.com/anchore/grype) | `brew install grype`, or a [release binary](https://github.com/anchore/grype/releases) | 0.121.3 |
+| [OSV-Scanner](https://github.com/google/osv-scanner) | `brew install osv-scanner`, or a [release binary](https://github.com/google/osv-scanner/releases) | 2.7.1 |
+| [Trivy](https://github.com/aquasecurity/trivy) | `brew install trivy`, or a [release binary](https://github.com/aquasecurity/trivy/releases) | 0.76.2 |
+| [Gitleaks](https://github.com/gitleaks/gitleaks) | `brew install gitleaks`, or a [release binary](https://github.com/gitleaks/gitleaks/releases) | 8.30.1 |
+| [TruffleHog](https://github.com/trufflesecurity/trufflehog) | `brew install trufflehog`, or a [release binary](https://github.com/trufflesecurity/trufflehog/releases) | 3.99.8 |
+| [Semgrep](https://github.com/semgrep/semgrep) | `pipx install semgrep` or `brew install semgrep` | 1.185.0 |
+| [Bandit](https://github.com/PyCQA/bandit) | `pipx install bandit` | 1.9.4 |
+| [gosec](https://github.com/securego/gosec) | `go install github.com/securego/gosec/v2/cmd/gosec@latest` (the Go toolchain is also needed at scan time) | 2.30.0 |
+| [Hadolint](https://github.com/hadolint/hadolint) | `brew install hadolint`, or a [release binary](https://github.com/hadolint/hadolint/releases) | — |
+| [Checkov](https://github.com/bridgecrewio/checkov) | `pipx install checkov` | — |
+| [KICS](https://github.com/Checkmarx/kics) | `brew install kics`, or a [release binary](https://github.com/Checkmarx/kics/releases) | — |
+| [kube-linter](https://github.com/stackrox/kube-linter) | `brew install kube-linter`, or a [release binary](https://github.com/stackrox/kube-linter/releases) | — |
+| [zizmor](https://github.com/zizmorcore/zizmor) | `brew install zizmor`, or a [release binary](https://github.com/zizmorcore/zizmor/releases) | 1.32.0 |
 
-A reasonable minimum is **Syft, Grype, Gitleaks and Semgrep**, plus **zizmor** when
-the repository uses GitHub Actions. Install scanners from their official releases
-and verify the published checksums: HTW runs whatever your `PATH` resolves.
+Trivy is one binary. The dependency agent may run `trivy fs`. The container and
+infrastructure agents run `trivy config` with `--skip-db-update`, never
+`trivy image`.
 
-**If a scanner is missing, HTW does not fail.** It prints a warning with the install
-command, tries the next tool that can do the same job, runs everything else, and
-lists in the report exactly what was not covered:
+## Configure `htw.yaml` and run a scan
 
-```
-[my-service] complete: 2 new, 0 reappeared, 0 resolved, 0 still open
-  ...
-  warning: semgrep is not installed (no `semgrep` on PATH). Install: `pipx install semgrep` or `brew install semgrep`
-  not covered: static analysis of JavaScript code
-```
-
-Use `htw scan --strict` if a coverage gap should fail the run instead.
-
-## Quick start
+From the repository you want to scan:
 
 ```bash
 cd /path/to/your/repository
-htw init        # writes htw.yaml for this directory
+htw init
 ```
 
-`htw init` leaves the owner and the authorization record empty on purpose. Open
-`htw.yaml` and fill them in: nothing can be scanned on the strength of a generated
-file.
+`htw init` writes `htw.yaml` for the current directory and leaves `owner` and the
+authorization dates empty. A generated file cannot be scanned until a person fills
+those in. Open it and set them:
 
 ```yaml
     owner: payments-team
@@ -148,294 +157,265 @@ file.
       expires_on: 2026-07-15
 ```
 
-Add `.htw/` to your `.gitignore`, then:
+If the directory is a git checkout, `htw init` also sets `type: repository` and
+`ownership.git_remote` from the remote it found. Check that remote. It must be
+`host/owner/repo`, for example `github.com/acme/payments-api`. Add `.htw/` to
+`.gitignore`. Reports describe weaknesses that may not be fixed yet, so that
+directory stays out of version control.
+
+Then:
 
 ```bash
-htw validate    # is the scope file valid, and would each asset be scanned?
-htw detect      # what stack was detected, and which scanners will run?
-htw scan        # scan, and write the report
+htw validate
+htw detect
+htw scan
 ```
 
-The report is at `.htw/reports/<asset>/<run>/report.md`. Run `htw scan` again and it
-reports nothing new.
+`htw validate` checks the file and says whether each asset would be scanned or
+refused. `htw detect` prints the stack and the scan plan without running a scanner
+and without writing a report. `htw scan` runs the plan. The full report is
+`.htw/reports/<asset>/<run>/report.md`. Run `htw scan` again and it reports nothing
+new, as long as `.htw/state.db` is still there.
 
-Read the short local digest of that finished scan:
+Read the short digest of that finished scan:
 
 ```bash
 htw digest
 ```
 
-This reads the latest `summary.json` and `findings.sarif` already written for each
-declared asset and writes `.htw/digest.md`. Open that file in an editor. It counts
-what changed, what is still open by priority and by asset, and what was not covered.
-HTW does not upload the digest and does not start a server.
+This does not scan again. It reads the latest `summary.json` and `findings.sarif`
+already written for each declared asset and writes `.htw/digest.md`. Open that file
+in an editor. It counts what changed, what is still open by priority and by asset,
+and what was not covered. The last line of the command output is the path. HTW
+does not upload the digest and does not start a server. The digest does not compute
+time to resolution or a false-positive rate, because the reports do not contain
+them.
 
-## The scope file
-
-`htw.yaml` is the allowlist. A commented example with every option is in
-[config/htw.example.yaml](config/htw.example.yaml). The essentials:
+A scope file you write by hand has the same shape. `version: 1` is required.
+`state_dir` defaults to `.htw` when you omit it. Unknown keys are rejected.
 
 ```yaml
 version: 1
 
+state_dir: .htw
+
 fixes:
-  propose: false                  # report-only (the default)
+  propose: false
 
 assets:
   - id: payments-api
-    type: repository              # a git checkout; or `directory`
-    path: ../payments-api
+    type: repository
+    path: .
     owner: payments-team
-    criticality: critical         # low | medium | high | critical
+    environment: development
+    criticality: medium       # low | medium | high | critical
+    max_level: L0             # static files only; see DAST below
     ownership:
-      git_remote: github.com/acme/payments-api   # verified before every scan
+      git_remote: github.com/acme/payments-api
     authorization:
       authorized_by: Jane Doe (Head of Engineering)
       authorized_on: 2026-01-15
-      expires_on: 2026-07-15      # scans are refused after this date
+      expires_on: 2026-07-15
     exclude:
       - vendor
 ```
 
-- Anything not listed is out of scope. `htw scan` accepts asset ids from this file
-  and nothing else; there is no way to point it at an arbitrary path or URL.
-- The file is validated strictly: an unknown key is an error.
-- Keep it in version control and review every change to it. A change to this file is
-  a change to what may be scanned.
+Every option is commented in [config/htw.example.yaml](config/htw.example.yaml).
+`limits.windows` and `limits.min_interval_minutes` restrict when and how often an
+asset may be scanned. `scanners.secrets.history` defaults to true, so a git
+checkout's secrets scan reads committed history and skips uncommitted files; set
+it to false to scan the working tree instead. `scanners.sast.semgrep_rules`
+defaults to `p/default`. Point it at local rule files if Semgrep should not
+download rules.
 
-## Commands
+To scan one asset from a file that lists several, pass `--asset` with the id from
+the file. Repeat the flag for more than one. `-c PATH` selects a scope file other
+than `./htw.yaml` for every command except `htw doctor`.
 
-| Command | What it does |
-|---|---|
-| `htw init` | Write a starter scope file for the current directory. |
-| `htw validate` | Check the scope file and say whether each asset would be scanned or refused, and why. |
-| `htw doctor` | List the scanners, whether each is installed, and what each sends over the network. |
-| `htw detect [--asset ID] [--json]` | Show the detected stack and the scan plan. Runs no scanner, writes nothing. |
-| `htw scan [--asset ID] [--fail-on SEVERITY] [--strict]` | Scan and report. |
-| `htw digest [--asset ID]` | Write `.htw/digest.md` from the latest finished scan. No upload. |
-| `htw audit-verify` | Verify the hash chain of the audit log. |
+If a finding is wrong or is a risk you accept, suppress it in `suppressions.yaml`
+next to the scope file. A reason, an author, and an expiry date are required.
+There is no permanent suppression. The example is
+[config/suppressions.example.yaml](config/suppressions.example.yaml). If a scan
+finds a real credential, revoke and rotate it first. Deleting it from the latest
+commit leaves it in git history.
 
-All commands take `-c PATH` to use a scope file other than `./htw.yaml`.
+`touch .htw/STOP` or `HTW_KILL_SWITCH=1` stops a run. `htw audit-verify` checks
+the hash chain in `.htw/audit.jsonl`.
 
-Exit codes of `htw scan`:
-
-| Code | Meaning |
-|---|---|
-| 0 | Completed. Nothing at or above `--fail-on` (if given) is new or reappeared. |
-| 1 | A new or reappeared finding is at or above `--fail-on`. |
-| 2 | Refused: invalid scope file, undeclared asset, expired authorization, failed ownership check, outside a scan window, or the kill switch is engaged. |
-| 3 | Incomplete: a scanner failed. With `--strict`, also when part of the stack was not covered. |
-
-`--fail-on` only looks at what is new or reappeared, so an existing backlog does not
-keep a pipeline red; it shows in the report as "still open".
-
-## What a scan writes
-
-Under `.htw/` (configurable with `state_dir`):
-
-```
-.htw/
-  digest.md                        written by `htw digest` from the reports below
-  state.db                         findings and their history
-  audit.jsonl                      who ran what, when, on which asset
-  reports/<asset>/<run>/
-    report.md                      what changed, what is open, what was not covered
-    findings.sarif                 SARIF 2.1.0, all findings on record
-    summary.json                   machine-readable summary
-    sbom.cdx.json                  CycloneDX SBOM (when Syft is installed)
-    proposals/                     fix proposals (when enabled)
-```
-
-**Treat this directory as confidential.** Reports describe weaknesses that may not be
-fixed yet. Do not commit it, and do not paste reports into public issues, pull
-requests or chats.
-
-In the SARIF file, each finding's stable id is in `partialFingerprints["htw/v1"]` and
-its status relative to the previous scan is in `baselineState`.
-
-## Recurring scans
-
-The findings state in `.htw/state.db` is what makes repeated scans quiet, so it has
-to persist between runs.
-
-On a machine you control, a cron entry is enough:
+For a repeated scan on a machine you control, keep `.htw/state.db` between runs:
 
 ```cron
 17 3 * * *  cd /srv/scans/payments-api && git pull -q && htw scan --fail-on high
 ```
 
-For GitHub Actions, see [docs/examples/scheduled-scan.yml](docs/examples/scheduled-scan.yml),
-and read the note at the top of it about public repositories.
+[docs/examples/scheduled-scan.yml](docs/examples/scheduled-scan.yml) is a GitHub
+Actions schedule. Read the note at the top before you use it. On a public
+repository, workflow artifacts can be downloaded by anyone, so do not upload the
+report that way.
 
-Use `limits.windows` and `limits.min_interval_minutes` in the scope file to bound
-when and how often an asset may be scanned.
+## What stays off, and how to turn it on
 
-## Working with findings
+Three things stay off until the scope file says otherwise. Turning them on does
+not create a GitHub token, a cloud credential, or a scanner license. The only new
+credential is the model provider key described below, and only if you enable the
+model. EPSS and CISA KEV need no key. Draft pull requests use the `gh` login the
+operator already has.
 
-Each finding has an id such as `htw1:5f0c…`, shown in the report. It stays the same
-when code moves or is reformatted, and for a dependency it stays the same until the
-advisory no longer applies.
+### A model for triage
 
-If a finding is wrong or is a risk you accept, suppress it in `suppressions.yaml`
-next to the scope file ([example](config/suppressions.example.yaml)):
+With the default `triage.llm: false`, triage is the local rules above and HTW does
+not call a model. To ask a model to review the findings after those rules:
 
 ```yaml
-suppressions:
-  - fingerprint: "htw1:0123456789abcdef0123456789abcdef"
-    kind: false_positive          # or accepted_risk
-    reason: Sample value in a documentation snippet, not a real credential.
-    author: jane.doe@example.com
-    expires: 2026-12-31
+triage:
+  enabled: true
+  llm: true
+  provider: openai          # openai or anthropic
+  api_key_env: OPENAI_API_KEY
 ```
 
-A reason, an author and an expiry date are required. There are no permanent
-suppressions: when one expires the finding is reported again. Keep the file in
-version control so that suppressions are reviewed like code.
+`api_key_env` is the name of an environment variable, not the key. HTW reads that
+variable when the scan runs. It does not accept a key in the file, it does not
+store one, and it does not call the provider when the variable is unset. In that
+case the scan is marked incomplete and the report records the error. The model may
+only mark a false positive or set confidence to low, which lowers priority one
+step (a secret finding keeps its priority). The prompt carries the fingerprint,
+rule, path, line, category, severity, and a short message. It does not carry
+secret context or a proposed patch. `model` is optional. When you omit it, OpenAI
+uses `gpt-4.1-mini` and Anthropic uses `claude-sonnet-4-5`.
 
-If a scan finds a real credential: revoke and rotate it first. Removing it from the
-latest commit is not enough, because it stays in the git history.
+### DAST against one staging URL
 
-## Fix proposals
+The default `max_level` is `L0`, so dynamic testing does not run and does not open
+a connection. To run it, the asset needs all of the following. `max_level` must be
+`L2`. `runtime.staging_url` must be an `http` or `https` URL for a staging host
+the operator owns, with no user or password in the URL. An `approvals` entry for
+control `dast` must be in force today, and its `target` must be exactly that same
+URL. The config is rejected if the two strings differ.
 
-With `fixes.propose: true`, each run also writes proposals to
-`reports/<asset>/<run>/proposals/`: one Markdown file per proposal and a `.patch`
-file where a patch could be derived.
+```yaml
+    max_level: L2
+    runtime:
+      staging_url: https://staging.example.com
+    approvals:
+      - control: dast
+        level: L2
+        authorized_by: Jane Doe (Head of Engineering)
+        authorized_on: 2026-01-15
+        expires_on: 2026-07-15
+        target: https://staging.example.com
+```
 
-Proposals cover two cases:
+Loopback, link-local, unspecified, multicast, and reserved addresses are refused,
+including `localhost` and cloud metadata names such as `metadata.google.internal`.
+`L3` cannot be set. Live checks of a cloud account or a cluster are not a level
+you can turn on. The tool that runs is ZAP's `zap-baseline.py`, and only against
+that URL. Nuclei stays unselected unless `scanners.dast.tools` lists `nuclei`. A
+Nuclei match for any other origin is dropped.
 
-- **Vulnerable dependencies.** HTW works out the lowest version that fixes every
-  advisory against a package. It writes a patch only when the edit is unambiguous
-  (an exact `==` pin without hashes in a requirements file); otherwise it states the
-  target version and leaves the upgrade to your package manager so that lockfiles
-  stay consistent. If Dependabot or Renovate is configured, the proposal says so
-  and defers to it.
-- **A scanner-supplied fix.** When Semgrep returns a small replacement for the
-  flagged lines, and that text still matches the file in exactly one place, HTW
-  writes a unified diff. The tree being scanned is not modified. A replacement that
-  looks like a credential is dropped.
+### Fix proposals and draft pull requests
 
-HTW does not apply a proposal. With `fixes.pull_requests: true` it can open the
-proposal as a **draft** pull request on GitHub, using the `git` and `gh` binaries
-and the login `gh` already has. HTW does not create a token. The branch is pushed
-from a temporary clone, never from the checkout that was scanned. If the pull
-request is not a draft, HTW closes it and records the failure. Nothing is merged.
+`fixes.propose` defaults to false, so a scan writes findings and no patches. Set
+it to true and each run also writes
+`.htw/reports/<asset>/<run>/proposals/`: one Markdown file per proposal, and a
+`.patch` when a patch is unambiguous. HTW does not edit the tree it scanned.
 
-A patch that describes an unfixed weakness (every scanner-supplied code fix) is
-refused unless `fixes.private_destination: true`. A dependency bump for a published
-advisory may go to a public repository. The rules live in
-[`PullRequestPublisher`](src/htw/integrations/pull_requests.py).
+Two kinds of patch are produced. A dependency bump is written only for an exact
+`==` pin, without hashes, in a requirements file, and only for the lowest version
+that clears the advisories HTW saw. Anything else is a note of the target version,
+left to your package manager. If Dependabot or Renovate is already configured, the
+proposal says so and defers to it. A code edit is written only when Semgrep
+supplies a small replacement, the original text occurs exactly once, and redaction
+does not change the text. A replacement that looks like a credential is dropped.
 
-## Guardrails
+`fixes.pull_requests: true` also needs `fixes.propose: true`. HTW then opens each
+proposal that has a patch as a GitHub draft. It uses the `git` and `gh` binaries
+on `PATH` and the login `gh` already has. It does not create a token. The patch is
+committed in a temporary clone, not in the checkout that was scanned, and the
+asset must have exactly one `github.com/owner/repo` remote. If the pull request is
+not a draft, HTW closes it and records the failure. It never merges and it never
+approves.
 
-The full list, with where each is implemented and its current limits, is in
-[docs/guardrails.md](docs/guardrails.md). In short:
+A dependency bump for a published advisory may be opened on a public repository.
+A patch that describes an unfixed weakness, which is every scanner-supplied code
+fix, is refused unless `fixes.private_destination: true`.
 
-- **Deny by default.** Only assets in the scope file, only while authorized.
-- **Ownership check** against the declared git remote before every scan.
-- **Static analysis (L0) unless a person approves more.** Container, infrastructure
-  and CI checks read files only. Runtime tests (L2) run only against one staging
-  URL named in a current approval, and they refuse without it. Read-only checks of
-  live cloud accounts (L1) are not in this release. Intrusive testing (L3) can
-  never be configured.
-- **Report-only by default; fixes are never auto-applied.**
-- **Secrets are redacted at the source.** Reports, SARIF, the state database and the
-  audit log hold the location and kind of a secret, never its value.
-- **Scanners are contained**: no shell, a scrubbed environment (your tokens do not
-  reach them), timeouts and output limits. When `bwrap` works, each scanner also
-  runs in a process sandbox: the asset is read-only, the home directory is not
-  mounted, and tools that do not use the network lose it. `git` and `gh` are not
-  wrapped, so a draft pull request can still use the login you already have.
-- **Kill switch**: `touch .htw/STOP` or `HTW_KILL_SWITCH=1` stops everything.
-- **Audit log** with a hash chain; `htw audit-verify` detects edits.
-- **Scanned content is treated as hostile**: no symlinks followed, nothing read
-  outside the asset, scanner text escaped in reports.
+## What is not built
 
-Two limits to know about now: the process sandbox is bubblewrap, not a
-digest-pinned container, and it is skipped (with a note in the report) where
-`bwrap` cannot start. HTW does not verify the scanner binaries. Run HTW as an
-unprivileged user on a machine that holds no credentials it does not need.
+HTW does not file tickets and does not post to chat. `htw digest` is a file on the
+machine that ran the scan. There is no dashboard, no time-to-resolution view, and
+no measured false-positive rate.
 
-## What leaves your machine
+It does not read live cloud accounts, clusters, or image registries. Container
+images, cloud accounts, clusters, and running applications are rejected as asset
+types. Dockle will not pull an image. Prowler, kube-bench, and fuzzing are not
+in this release.
 
-When a finding carries a CVE id and `exploitability.enabled` is true (the default),
-HTW downloads two public feeds: the CISA Known Exploited Vulnerabilities catalog
-and FIRST EPSS scores for those CVE ids. The request sends only the CVE ids. There
-is no API key. Responses are cached under the state directory for 24 hours. Set
-`exploitability.enabled: false` to skip the downloads. If a feed cannot be fetched,
-priority is left unchanged.
+Patches stop at the two safe cases above. There is no general code fix, no
+generated rewrite, and no patch that HTW applies by itself.
 
-Some of the scanners HTW runs also use the network, to fetch rules or vulnerability
-data. `htw doctor` prints this for the scanners you have.
+Also absent, so the report does not imply them: reachability of a vulnerable
+function, a scan of only the pull-request diff, and any check at `L3`.
 
-| Tool | Network use |
+## Commands and results
+
+| Command | What it does |
 |---|---|
-| Syft, Gitleaks, Bandit | None. |
-| TruffleHog | None. HTW always disables verification of found credentials, which would contact the service a credential belongs to. |
-| Grype, Trivy | Download their vulnerability database. Package data stays local. |
-| OSV-Scanner | Sends package names and versions to osv.dev (and deps.dev, to resolve transitive dependencies). No source code. |
-| Semgrep | Downloads rulesets from semgrep.dev unless `semgrep_rules` points to local rule files. HTW disables its metrics and version check. No code is uploaded. |
-| gosec | The Go toolchain may download modules the scanned code depends on. |
-| Hadolint, KICS, kube-linter, zizmor, cosign, Dockle | None. zizmor is passed `--offline`. Dockle is only given a local image archive. cosign verifies a blob with a key file inside the asset. |
-| Checkov | None with the flags HTW passes: external modules are not downloaded and results are not uploaded. |
-| Trivy `config` | `--skip-db-update`. A missing local vulnerability cache may still be fetched once; the files stay local. |
-| OpenSSF Scorecard | Opt-in. Local mode can still contact GitHub. HTW adds no token. |
-| ZAP, Nuclei | Only the staging URL in the current approval. Refused otherwise. No other host is passed on the command line, and a Nuclei match for any other origin is dropped. |
+| `htw init` | Write a starter scope file for the current directory. |
+| `htw validate` | Check the scope file and say whether each asset would be scanned or refused. |
+| `htw doctor` | List scanners, whether each is installed, what each sends on the network, and the sandbox status. |
+| `htw detect [--asset ID] [--json]` | Show the detected stack and the scan plan. Runs no scanner and writes nothing. |
+| `htw scan [--asset ID] [--fail-on SEVERITY] [--strict]` | Scan and write the report. |
+| `htw digest [--asset ID]` | Write `.htw/digest.md` from the latest finished scan. |
+| `htw audit-verify` | Verify the hash chain of the audit log. |
 
-To keep everything on the machine, set `tools:` explicitly in the scope file (for
-example Syft, Gitleaks and Bandit) and point `semgrep_rules` at local rules.
+`--fail-on` takes `critical`, `high`, `medium`, `low`, or `info`. It looks only at
+findings that are new or back, so an existing backlog does not keep a pipeline red.
 
-## Limitations
+| Exit code of `htw scan` | Meaning |
+|---|---|
+| 0 | Completed. Nothing at or above `--fail-on`, if you passed one, is new or back. |
+| 1 | A new or reappeared finding is at or above `--fail-on`. |
+| 2 | Refused: invalid scope file, unknown asset, expired authorization, failed ownership check, outside a scan window, or the kill switch. |
+| 3 | Incomplete: a scanner failed, or the model was enabled and could not be called. With `--strict`, also when part of the stack was not covered. |
 
-What this release does not do. Each item is planned unless noted.
+`htw digest` exits 2 when there is no finished report to read.
 
-- **Assets:** repositories and directories only. Container images, cloud accounts,
-  clusters and running applications are rejected by the scope file with a message
-  saying so.
-- **No live cloud, cluster or image-registry scanning.** Container and
-  infrastructure checks read the files in the checkout. Dockle refuses to pull an
-  image. Prowler, kube-bench and similar read-only checks of running systems are
-  not in this release.
-- **Runtime tests need a decision you record yourself.** DAST runs only with
-  `max_level: L2`, `runtime.staging_url`, and an `approvals` entry for control
-  `dast` whose target is that exact URL and whose dates include today. Loopback,
-  link-local and cloud metadata addresses are rejected. Without that record the
-  agent does not run and does not open a network connection.
-- **Triage is deterministic.** It drops SAST, container, infrastructure and
-  pipeline findings under vendored and virtualenv trees, drops secret findings in
-  documentation only when the context looks like a placeholder, and collapses two
-  tools' reports of the same CWE at the same line or the same advisory on the same
-  package. A model is optional (`triage.llm`) and off by default; with no provider
-  configured, HTW makes no network call. The model may only mark a false positive
-  or lower confidence. It does not receive secret context or a proposed patch.
-- **CI systems with no wrapped scanner stay unscanned.** Jenkins, Tekton, Travis,
-  Drone, CodeBuild and the other systems the detector names but Checkov and zizmor
-  do not read are reported as `no wrapped scanner`. Installing another copy of
-  Checkov does not close that gap, and HTW does not add a scanner for them.
-- **The process sandbox is not a network allowlist.** Bubblewrap, when it starts,
-  hides the home directory and keeps the asset read-only. It does not pin scanner
-  images by digest and does not restrict egress to a list of addresses. Where
-  `bwrap` is missing, scanners run as this user and the report says so. See
-  [docs/guardrails.md](docs/guardrails.md#current-limits).
-- **Reports go to files.** `htw digest` reads those files and writes `digest.md`
-  beside them. No issue tracker, chat, or dashboard server. Draft pull requests
-  are GitHub only, and only when `fixes.pull_requests` is true. The digest does
-  not compute time to resolution or a false-positive rate: the written reports
-  do not carry them.
-- **Priority starts from severity and asset criticality**, then rises one step
-  when a CVE is in the CISA KEV catalog and one more when its EPSS score is at
-  least 0.10, capped at P0. Both steps require a feed fetched during the run or
-  a cache less than 24 hours old. An unavailable feed does not raise priority,
-  and a low score does not lower it. Triage then lowers a low-confidence finding
-  by one step (secret findings keep their priority). Reachability is not scored.
-- **Deduplication is conservative.** Two different advisories on one package stay
-  separate. Two findings from the same tool stay separate. Code findings collapse
-  across tools only when they share a CWE, a path and a line.
-- **Secrets, history mode:** for a git checkout the secrets scanner reads committed
-  content, so files that are not committed yet are not scanned. Set `history: false`
-  to scan the files in the working tree instead.
-- **Whole-tree scans only.** There is no mode that scans just the diff of a pull
-  request.
-- **Platforms:** Linux and macOS. Windows is untested.
+A scan writes this under `state_dir` (`.htw` unless you change it). `digest.md`
+appears when you run `htw digest`, not during the scan.
+
+```
+.htw/
+  digest.md
+  state.db
+  audit.jsonl
+  reports/<asset>/<run>/
+    report.md
+    findings.sarif
+    summary.json
+    sbom.cdx.json          # when Syft ran
+    proposals/             # when fixes.propose is true
+```
+
+What else leaves the machine, besides the EPSS and KEV downloads above: Grype and
+Trivy download a vulnerability database; OSV-Scanner sends package names and
+versions to osv.dev and deps.dev; Semgrep downloads rulesets unless
+`semgrep_rules` points at local files, and HTW passes `--metrics=off` and
+`--disable-version-check`; gosec's Go toolchain may download modules. OpenSSF
+Scorecard runs only when `scanners.pipeline.tools` names `scorecard`, and cosign
+only when that list names `cosign`. The list is the whole selection for the
+pipeline agent, so keep `zizmor` and `checkov` on it if you still want them.
+Scorecard's local mode can still contact GitHub, and HTW adds no token. cosign is
+run as `cosign verify-blob --offline` with a `cosign.pub` file inside the asset. ZAP and Nuclei contact only the approved
+staging URL. Syft, Gitleaks, Bandit, and TruffleHog (`--no-verification`
+`--no-update`) do not use the network, and neither do Hadolint, KICS,
+kube-linter, zizmor (`--offline`), cosign, or Dockle under the flags HTW passes.
+Checkov is passed `--download-external-modules false` and `--skip-results-upload`.
+Trivy `config` is passed `--skip-db-update`; a missing local cache may still be
+fetched once. `htw digest` reads local files only.
+
+The guardrails, and the limits of the bubblewrap sandbox, are written out in
+[docs/guardrails.md](docs/guardrails.md).
 
 ## Development
 
@@ -445,18 +425,16 @@ pip install --no-deps --no-build-isolation -e .
 ruff check . && ruff format --check . && mypy && pytest
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/architecture.md](docs/architecture.md)
-and the decision records in [docs/adr/](docs/adr/). The implementation language is
-Python; the reasoning is in
-[ADR 0001](docs/adr/0001-implementation-language.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/architecture.md](docs/architecture.md),
+and [ADR 0001](docs/adr/0001-implementation-language.md). The language is Python.
 
 `tests/fixtures/` holds intentionally vulnerable test data with synthetic
 credentials. It is excluded from HTW's scan of itself.
 
 ## Security
 
-To report a vulnerability in HTW, see [SECURITY.md](SECURITY.md). Please do not open
-a public issue.
+To report a vulnerability in HTW, see [SECURITY.md](SECURITY.md). Please do not
+open a public issue.
 
 ## License
 
