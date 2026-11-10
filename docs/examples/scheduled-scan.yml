@@ -1,0 +1,86 @@
+# Example: a nightly HTW scan of a repository, with GitHub Actions.
+#
+# Copy to .github/workflows/htw-scan.yml in the repository you want to scan. That
+# repository needs an htw.yaml that declares it (run `htw init` there, then fill in the
+# owner and the authorization record).
+#
+# READ THIS FIRST: HTW reports describe weaknesses that may not be fixed yet. This
+# workflow stores the findings state in the Actions cache and uploads the report as a
+# workflow artifact. In a PRIVATE repository both are visible to people with access to
+# the repository. In a PUBLIC repository artifacts can be downloaded by anyone, so do
+# not use this workflow there as it is: run HTW on a machine you control instead (see
+# "Recurring scans" in the README), or remove the upload step.
+name: HTW scan
+
+on:
+  schedule:
+    - cron: "17 3 * * *"   # every night, 03:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: htw-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0   # the secrets scanner reads the git history
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      # Pin HTW to a commit you have reviewed. Replace the placeholder.
+      - name: Install HTW
+        run: python -m pip install "git+https://github.com/fen0dev/HTW.git@<commit-sha>"
+
+      # Install the scanners you want, pinned and checksum-verified. See the README
+      # for the list. This example installs none: HTW then reports which ones are
+      # missing and what was not covered.
+      # - name: Install scanners
+      #   run: ...
+
+      # The findings state is what lets HTW report only what changed. Each run saves
+      # a new cache entry and restores the most recent one.
+      - name: Restore HTW state
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .htw/state.db
+            .htw/audit.jsonl
+          key: htw-state-${{ github.run_id }}
+          restore-keys: htw-state-
+
+      - name: Scan
+        id: scan
+        # Exit codes: 0 nothing above the threshold, 1 new or reappeared findings at
+        # or above --fail-on, 2 refused (scope, authorization, kill switch),
+        # 3 incomplete (a scanner failed; with --strict also coverage gaps).
+        run: htw scan --fail-on high
+
+      - name: Save HTW state
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .htw/state.db
+            .htw/audit.jsonl
+          key: htw-state-${{ github.run_id }}
+
+      # Private repositories only. See the note at the top of this file.
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: htw-report
+          path: .htw/reports/
+          include-hidden-files: true
+          retention-days: 14

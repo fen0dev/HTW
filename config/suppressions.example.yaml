@@ -1,0 +1,25 @@
+# HTW suppressions (example).
+#
+# A suppression is a reviewed decision to stop reporting one finding. Keep this file
+# in version control next to the scope file, so that every suppression goes through
+# code review.
+#
+# Every entry needs a reason, an author and an expiry date. There are no permanent
+# suppressions: when one expires the finding is reported again and the report says the
+# suppression has lapsed.
+#
+# `fingerprint` is the finding id shown in the report (the "Id" column).
+suppressions:
+  - fingerprint: "htw1:0123456789abcdef0123456789abcdef"
+    kind: false_positive           # false_positive | accepted_risk
+    reason: Sample value in a documentation snippet, not a real credential.
+    author: jane.doe@example.com
+    expires: 2026-12-31
+
+  - fingerprint: "htw1:fedcba9876543210fedcba9876543210"
+    kind: accepted_risk
+    reason: >-
+      The vulnerable function is not reachable from our code. Upgrade is blocked on
+      the framework migration tracked in ENG-482.
+    author: sam.lee@example.com
+    expires: 2026-09-30
