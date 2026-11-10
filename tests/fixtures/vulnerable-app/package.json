@@ -1,0 +1,10 @@
+{
+  "name": "htw-vulnerable-app-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Intentionally outdated dependencies (test fixture). Do not upgrade.",
+  "dependencies": {
+    "lodash": "4.17.15",
+    "minimist": "1.2.0"
+  }
+}
