@@ -1,0 +1,27 @@
+# Scope file for scanning HTW itself with HTW.
+# For a commented template to start from, see config/htw.example.yaml.
+version: 1
+
+state_dir: .htw
+
+fixes:
+  propose: false
+
+assets:
+  - id: htw
+    type: repository
+    path: .
+    owner: fen0dev
+    environment: development
+    criticality: medium
+    max_level: L0
+    ownership:
+      git_remote: github.com/fen0dev/HTW
+    authorization:
+      authorized_by: fen0dev (repository owner)
+      authorized_on: 2026-11-10
+      expires_on: 2027-11-10
+      reference: Self-scan of the HTW repository, requested by its owner
+    exclude:
+      # Intentionally vulnerable test data. See tests/fixtures/README.md.
+      - tests/fixtures

@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # The SARIF 2.1.0 JSON schema, pinned by commit and verified by checksum below.
+  SARIF_SCHEMA_URL: https://raw.githubusercontent.com/oasis-tcs/sarif-spec/1742a253eb654bf8a4ed7c60eaef7412b2c23553/sarif-2.1/schema/sarif-schema-2.1.0.json
+  SARIF_SCHEMA_SHA256: c3b4bb2d6093897483348925aaa73af03b3e3f4bd4ca38cef26dcb4212a2682e
+
+jobs:
+  test:
+    name: Lint, types and tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements-dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
+
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Type check
+        run: mypy
+
+      - name: Fetch the SARIF schema
+        run: |
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/sarif-schema-2.1.0.json" "$SARIF_SCHEMA_URL"
+          echo "$SARIF_SCHEMA_SHA256  $RUNNER_TEMP/sarif-schema-2.1.0.json" | sha256sum -c -
+          echo "HTW_SARIF_SCHEMA=$RUNNER_TEMP/sarif-schema-2.1.0.json" >> "$GITHUB_ENV"
+
+      # No scanner binaries are installed in this job: it also proves that HTW works,
+      # and degrades gracefully, without them.
+      - name: Test
+        run: pytest
+
+  scanners:
+    name: End to end with real scanners
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+      SYFT_VERSION: 1.57.1
+      SYFT_SHA256: bf52519eb57f675d47c07d43213cb6dff6449f3d6d1147ff6701ed91f44eef0c
+      GRYPE_VERSION: 0.121.3
+      GRYPE_SHA256: e9da18cc1429e786722e32161288103600efffd8e483c90761f90485bd1bec85
+      ZIZMOR_VERSION: 1.32.0
+      ZIZMOR_SHA256: bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The secrets scanner reads the git history.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements-dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
+
+      - name: Install scanners (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/scanners/bin"
+          mkdir -p "$bin"
+          cd "$RUNNER_TEMP"
+
+          fetch() { # url sha256 binary
+            curl -sSfL --retry 3 -o archive.tar.gz "$1"
+            echo "$2  archive.tar.gz" | sha256sum -c -
+            tar -xzf archive.tar.gz -C "$bin" "$3"
+            rm archive.tar.gz
+          }
+          fetch "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" "$GITLEAKS_SHA256" gitleaks
+          fetch "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz" "$SYFT_SHA256" syft
+          fetch "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/grype_${GRYPE_VERSION}_linux_amd64.tar.gz" "$GRYPE_SHA256" grype
+          fetch "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/zizmor-x86_64-unknown-linux-gnu.tar.gz" "$ZIZMOR_SHA256" zizmor
+
+          # Semgrep and Bandit get their own environment: their dependencies are
+          # not HTW's.
+          python -m venv "$RUNNER_TEMP/scanners/venv"
+          "$RUNNER_TEMP/scanners/venv/bin/python" -m pip install --require-hashes -r "$GITHUB_WORKSPACE/.github/requirements-scanners.txt"
+          for tool in semgrep pysemgrep bandit; do
+            ln -s "$RUNNER_TEMP/scanners/venv/bin/$tool" "$bin/$tool"
+          done
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: Show installed scanners
+        run: htw doctor
+
+      - name: Integration tests (temporary copy of the test fixture only)
+        run: pytest -m scanner -rs
+
+      # HTW scans HTW. The scope file names this repository's remote, so in a fork
+      # the ownership check would refuse the scan, as it should. The report itself is
+      # deliberately not uploaded: reports are not for public places.
+      - name: Self-scan
+        if: github.repository == 'fen0dev/HTW'
+        run: |
+          htw validate
+          htw detect
+          htw scan --strict --fail-on high
+          htw audit-verify

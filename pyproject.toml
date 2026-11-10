@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "htw"
+version = "0.1.0"
+description = "Security scanning agents that engineering teams run on systems they own: stack detection, scanner orchestration, change-only reporting and fix proposals for human review."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["security", "sast", "sbom", "secrets", "sarif", "vulnerability-scanning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Security",
+]
+# One runtime dependency, on purpose: a security tool should have a small supply chain.
+dependencies = ["PyYAML>=6.0.2,<7"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "types-PyYAML>=6.0.12",
+    "jsonschema>=4.23",
+    # The build backend, listed so that requirements-dev.txt pins it and CI can install
+    # the package without fetching an unpinned build dependency.
+    "setuptools>=77",
+]
+
+[project.scripts]
+htw = "htw.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/fen0dev/HTW"
+Issues = "https://github.com/fen0dev/HTW/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+norecursedirs = ["fixtures"]
+markers = [
+    "scanner(name): needs the named external scanner binary; skipped when it is not installed",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["tests/fixtures"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "C4", "SIM", "RUF"]
+ignore = [
+    "E501",    # line length is handled by the formatter where it can be
+    "S101",    # assert is used for internal invariants and in tests
+    "S603",    # subprocess calls are the product; argv is built by HTW and never a shell
+    "S607",    # scanners are resolved on PATH by design
+    "SIM105",
+    "RUF001",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B011"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src/htw"]

@@ -1,0 +1,5 @@
+pipelines:
+  default:
+    - step:
+        script:
+          - mvn -q package

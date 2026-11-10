@@ -1,0 +1,28 @@
+# HTW state: findings store, audit log and reports. These can describe unfixed
+# weaknesses and must not be committed.
+.htw/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local secrets and environment files
+.env
+.env.*
+!.env.example
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store

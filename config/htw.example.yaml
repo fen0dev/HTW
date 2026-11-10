@@ -1,0 +1,109 @@
+# HTW scope file (example).
+#
+# This file is the allowlist. HTW scans only the assets declared here, and only while
+# their authorization record is valid. Everything else is out of scope by default.
+#
+# Only declare systems you own or are explicitly authorized to test.
+#
+# Copy this file to `htw.yaml`, or run `htw init` in the directory you want to scan.
+# Keep it in version control and require review for every change to it: a change to
+# this file is a change to what may be scanned.
+version: 1
+
+# Where HTW keeps its findings store, audit log and reports. Relative paths are
+# resolved against this file. Reports can describe unfixed weaknesses: keep this
+# directory out of version control and readable only by the people who need it.
+state_dir: .htw
+
+# Reviewed decisions to stop reporting a finding. See suppressions.example.yaml.
+suppressions: suppressions.yaml
+
+# Report-only by default. With `propose: true`, HTW also writes fix proposals
+# (a description and, where it is unambiguous, a patch) next to the report.
+# Proposals are for a person to review. HTW never applies or merges anything.
+fixes:
+  propose: false
+  # pull_requests opens each proposal as a GitHub draft and never merges.
+  # private_destination must be true before a code patch may be published.
+  pull_requests: false
+  private_destination: false
+
+# Local triage. A model stays off until provider and api_key_env are set.
+# HTW reads the key from that environment variable and does not store it.
+triage:
+  enabled: true
+  llm: false
+
+# How scanner processes are run.
+runner:
+  timeout_seconds: 900     # per scanner invocation
+  max_output_mb: 256       # a scanner producing more output than this is stopped
+  # Scanners run with a scrubbed environment. List here the extra variables they need,
+  # for example a cache location. Never list credentials you do not want them to see.
+  env_passthrough: []
+
+# Defaults for every asset. An asset can override any of these under its own
+# `scanners:` key.
+scanners:
+  deps_sbom:
+    enabled: true
+    tools: auto            # or an explicit list: [syft, grype, osv-scanner, trivy]
+  secrets:
+    enabled: true
+    tools: auto            # or [gitleaks, trufflehog]
+    history: true          # scan the git history too, not just the current files
+  sast:
+    enabled: true
+    tools: auto            # or [semgrep, bandit, gosec]
+    # Semgrep registry rulesets (p/... or r/...) or paths to local rule files,
+    # relative to this file. Local rules keep Semgrep off the network.
+    semgrep_rules: [p/default]
+
+assets:
+  # A git checkout. `ownership.git_remote` is verified before every scan: if the
+  # checkout's remotes do not match, the scan is refused.
+  - id: payments-api
+    type: repository
+    path: ../payments-api          # relative to this file, or absolute
+    owner: payments-team           # who is responsible for this asset
+    environment: production        # development | ci | staging | production | other
+    criticality: critical          # low | medium | high | critical; raises or lowers priority
+    max_level: L0                  # L0 = static files. L2 DAST needs a current approval. L3 is rejected.
+    ownership:
+      # host/owner/repo. The host and the owner must be written out; a wildcard is
+      # allowed after them (github.com/acme/*).
+      git_remote: github.com/acme/payments-api
+    authorization:
+      authorized_by: Jane Doe (Head of Engineering)   # a named person
+      authorized_on: 2026-01-15
+      expires_on: 2026-07-15       # scans are refused after this date
+      reference: SEC-1234          # optional: ticket or document recording the approval
+    exclude:
+      - vendor
+      - "*.min.js"
+      - docs/examples/**
+    limits:
+      min_interval_minutes: 60     # refuse a scan that starts sooner after the last one
+      windows:                     # scans may only start inside these windows (UTC)
+        - days: [mon, tue, wed, thu, fri]
+          start: "22:00"
+          end: "06:00"             # an end before the start wraps past midnight
+    scanners:
+      sast:
+        semgrep_rules: [p/default, p/owasp-top-ten]
+
+  # A plain directory. There is nothing to verify ownership against, so the
+  # authorization record is the only basis for scanning it. Use `repository` wherever
+  # the path is a git checkout.
+  - id: build-scripts
+    type: directory
+    path: /srv/build-scripts
+    owner: platform-team
+    criticality: medium
+    authorization:
+      authorized_by: Sam Lee (Platform Lead)
+      authorized_on: 2026-01-15
+      expires_on: 2026-07-15
+    scanners:
+      deps_sbom:
+        enabled: false

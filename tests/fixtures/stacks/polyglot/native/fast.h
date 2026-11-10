@@ -1,0 +1,1 @@
+int fast(void);
