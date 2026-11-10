@@ -20,18 +20,26 @@ htw scan
    +--> Dependencies and SBOM   Syft -> Grype | OSV-Scanner | Trivy
    +--> Secrets                 Gitleaks | TruffleHog
    +--> Static analysis         Semgrep | Bandit | gosec
+   +--> Containers              Hadolint, Trivy config | Checkov   (files only)
+   +--> Infrastructure          Checkov | Trivy config | KICS | kube-linter
+   +--> CI/CD                   zizmor | Checkov                    (workflow files)
+   +--> Runtime (L2)            ZAP baseline, only with a current approval
    |
    v
- normalize -> fingerprint -> prioritize -> compare with the previous run
+ normalize -> fingerprint -> triage -> prioritize -> compare with the previous run
    |
    v
  report.md, findings.sarif, summary.json, SBOM, optional fix proposals
+   |
+   v
+ optional: draft pull request (never merged)
 ```
 
-The orchestrator is deterministic: it follows these steps and decides nothing by
-judgement. Phase 1 makes no LLM calls. "Agent" here means a component that owns one
-kind of check behind a common interface; the agents that reason with a model (triage,
-deep review, fix generation) are later phases and plug into the same pipeline.
+The orchestrator follows these steps. Triage is deterministic and on by default. A
+language model is optional, off unless the scope file names a provider, and never
+called when that provider's key is absent. "Agent" here means a component that owns
+one kind of check behind a common interface. Deep review and generated fixes beyond
+a scanner-supplied patch are not in this release.
 
 Every step that matters (scope decision, run start, each tool executed, run end) is
 written to the audit log.
@@ -59,17 +67,21 @@ src/htw/
   scanners/              one adapter per external tool
   agents/
     base.py              the agent interface and tool selection
-    deps_sbom.py, secrets.py, sast.py
+    deps_sbom.py, secrets.py, sast.py, container.py, iac.py, pipeline.py, dast.py
+    triage.py            deduplicate, rank, optional model
     orchestrator.py      the pipeline
     reporting.py         report.md, SARIF, summary.json
     fixer.py             fix proposals
   integrations/
-    pull_requests.py     proposal files; the draft pull request interface
+    pull_requests.py     proposal files and the draft pull request rules
+    github.py            opens a draft pull request with git and gh
+  core/llm.py            optional triage client; no call unless configured
 ```
 
 This follows the layout in the architecture plan, as one installable package. Parts of
-the plan that phase 1 does not need (`llm/`, `evals/`, tracker and chat integrations,
-the remaining agents) are not stubbed out.
+the plan that this release does not need (`evals/`, tracker and chat integrations,
+live cloud hardening, fuzzing) are not stubbed out. The model client is one module
+and stays unused until `triage.llm` is set.
 
 ## Stack detection
 
@@ -96,8 +108,9 @@ automation, version control.
 
 `htw detect` prints the profile and the resulting scan plan without running a scanner.
 
-Detection also records what HTW cannot do yet: when containers, infrastructure code or
-pipelines are detected, the report says that no scanner covers them in this release.
+A CI system the detector recognizes and no wrapped tool covers is reported as a gap
+(`cicd:uncovered:<name>`). Cloud providers detected from files are not contacted:
+without infrastructure files, the infrastructure agent says so and stops.
 
 ## Scanner agents and tool adapters
 
@@ -186,17 +199,18 @@ Under `<state_dir>/reports/<asset>/<run>/`:
 ## Fix proposals
 
 `fixes.propose: true` adds proposals to the run. A proposal states the remedy and
-carries a patch only where the edit is mechanical and unambiguous. In phase 1 that is
-one case: an exact `==` pin without hashes in a requirements file. Everything else
-gets a proposal without a patch, with the target version and an instruction to
-upgrade through the package manager.
+carries a patch in two cases: an exact `==` pin without hashes in a requirements
+file, and a Semgrep replacement that is small, survives redaction, and matches the
+reported lines in exactly one place. The scanned tree is not edited. Everything else
+gets a proposal without a patch.
 
-Proposals are written as files. `PullRequestPublisher` in
-`integrations/pull_requests.py` is the interface for opening them as pull requests;
-its base class enforces the rules (enabled explicitly, asset in scope, draft only,
-never merge, nothing that discloses an unfixed weakness to a public destination) so
-that an implementation cannot skip them. Phase 1 ships no implementation for a
-specific forge.
+Proposals are written as files. `fixes.pull_requests: true` asks
+`GitHubCliPublisher` to open each one as a draft. The publisher subclasses
+`PullRequestPublisher`, so the rules (enabled explicitly, asset in scope, draft
+only, never merge, nothing that discloses an unfixed weakness to a public
+destination) cannot be skipped. The work happens in a temporary clone. `gh` uses
+the login it already has; HTW creates no token. A pull request that is not a draft
+is closed and the failure is recorded. Code patches stay `public_safe: false`.
 
 ## Differences from the plan
 

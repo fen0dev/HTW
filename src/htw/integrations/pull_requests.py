@@ -21,6 +21,7 @@ from pathlib import Path
 
 from htw.agents.fixer import FixProposal
 from htw.core.config import Asset
+from htw.core.runner import ToolRunner
 from htw.core.scope import ScopeDecision
 from htw.errors import ScopeViolation
 
@@ -140,3 +141,31 @@ class PullRequestPublisher(ABC):
         self, *, asset: Asset, branch: str, title: str, body: str, patch: str
     ) -> PullRequestRef:
         """Create `branch`, commit `patch` on it and open a draft pull request."""
+
+
+class GitHubCliPublisher(PullRequestPublisher):
+    """Draft pull requests on GitHub through the operator's existing `gh` login."""
+
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        destination_is_private: bool = False,
+        runner: ToolRunner | None = None,
+    ):
+        super().__init__(enabled=enabled, destination_is_private=destination_is_private)
+        self._runner = runner or ToolRunner()
+
+    def _open_draft_pull_request(
+        self, *, asset: Asset, branch: str, title: str, body: str, patch: str
+    ) -> PullRequestRef:
+        from htw.integrations.github import open_github_draft
+
+        return open_github_draft(
+            source=asset.path,
+            branch=branch,
+            title=title,
+            body=body,
+            patch=patch,
+            runner=self._runner,
+        )

@@ -18,11 +18,13 @@ from htw.agents.base import AgentPlan, ScannerAgent
 from htw.agents.fixer import FixContext, propose_fixes
 from htw.agents.reporting import write_reports
 from htw.agents.run import COMPLETE, INCOMPLETE, REFUSED, STOPPED, AssetRun
+from htw.agents.triage import triage_findings
 from htw.core.audit import AuditLog, initiator
 from htw.core.config import Asset, Config
 from htw.core.finding import Finding, sanitize_finding
 from htw.core.fingerprint import assign_fingerprints
 from htw.core.levels import ControlLevel
+from htw.core.llm import client_for
 from htw.core.paths import is_excluded
 from htw.core.runner import ToolRunner
 from htw.core.scope import KillSwitch, ScopeDecision, ScopeGuard
@@ -31,6 +33,7 @@ from htw.core.store import Store
 from htw.core.suppressions import SuppressionSet, load_suppressions
 from htw.detect import StackProfile, detect_stack
 from htw.errors import HtwError, KillSwitchEngaged
+from htw.integrations.pull_requests import GitHubCliPublisher, PullRequestPublisher
 from htw.scanners.base import STATUS_ERROR, STATUS_MISSING, STATUS_OK, ScanContext, ToolOutcome
 
 MAX_FINDINGS_PER_TOOL = 5000
@@ -45,6 +48,7 @@ class Orchestrator:
         runner: ToolRunner | None = None,
         agents: Sequence[ScannerAgent] = AGENTS,
         environ: dict[str, str] | None = None,
+        publisher: PullRequestPublisher | None = None,
     ):
         self.config = config
         self._now = now or (lambda: datetime.now(UTC))
@@ -59,6 +63,7 @@ class Orchestrator:
         )
         self.audit = AuditLog(config.audit_path)
         self._environ = environ
+        self._publisher = publisher
 
     def select_assets(self, asset_ids: Sequence[str] | None) -> list[Asset]:
         if not asset_ids:
@@ -77,7 +82,7 @@ class Orchestrator:
         plans = []
         guard = ScopeGuard(self._now())
         for agent in self.agents:
-            level_check = guard.check(asset, agent.level)
+            level_check = guard.check(asset, agent.level, control=agent.approval_control or None)
             if not level_check.allowed:
                 plans.append(
                     AgentPlan(agent.name, agent.title, False, "; ".join(level_check.reasons))
@@ -270,6 +275,13 @@ class Orchestrator:
         asset = run.asset
         assign_fingerprints(findings, asset.path)
         assign_priorities(findings, asset.criticality)
+        if self.config.triage.enabled:
+            llm = client_for(self.config.triage) if self.config.triage.llm else None
+            findings, run.triage = triage_findings(findings, environment=asset.environment, llm=llm)
+            for note in run.triage:
+                if note.action == "error":
+                    run.status = INCOMPLETE
+                    run.notes.append(note.reason)
         completed = {o.tool for o in run.outcomes if o.status == STATUS_OK}
         run.delta = store.apply_run(run.run_id, asset.id, self._now(), findings, completed)
 
@@ -289,4 +301,31 @@ class Orchestrator:
             open_findings = run.visible(run.delta.new + run.delta.reappeared + run.delta.unchanged)
             run.proposals = propose_fixes(
                 open_findings, FixContext(asset.id, asset.path, run.profile)
+            )
+            if self.config.fixes.pull_requests:
+                self._publish(run)
+
+    def _publish(self, run: AssetRun) -> None:
+        publisher = self._publisher or GitHubCliPublisher(
+            enabled=True,
+            destination_is_private=self.config.fixes.private_destination,
+            runner=self.runner,
+        )
+        for proposal in run.proposals:
+            if not proposal.has_patch:
+                continue
+            try:
+                reference = publisher.publish(proposal, run.asset, run.decision)
+            except HtwError as exc:
+                run.notes.append(f"{proposal.id}: pull request not opened: {exc}")
+                continue
+            run.pull_requests.append(reference)
+            self.audit.append(
+                "pull_request_opened",
+                at=self._now(),
+                run=run.run_id,
+                asset=run.asset.id,
+                branch=reference.branch,
+                url=reference.url,
+                draft=reference.draft,
             )

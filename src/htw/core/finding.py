@@ -9,7 +9,11 @@ from typing import Any
 DEPENDENCY = "dependency"
 SECRET = "secret"  # noqa: S105 - a finding category, not a credential
 SAST = "sast"
-CATEGORIES = (DEPENDENCY, SECRET, SAST)
+CONTAINER = "container"
+IAC = "iac"
+PIPELINE = "pipeline"
+DAST = "dast"
+CATEGORIES = (DEPENDENCY, SECRET, SAST, CONTAINER, IAC, PIPELINE, DAST)
 
 
 class Severity(StrEnum):
@@ -94,6 +98,14 @@ class Package:
 
 
 @dataclass
+class LineFix:
+    """Scanner-supplied replacement of the matched source. HTW never applies it."""
+
+    original: str
+    replacement: str
+
+
+@dataclass
 class Finding:
     asset_id: str
     agent: str
@@ -112,6 +124,8 @@ class Finding:
     # Text the fingerprint is derived from when it cannot be read from the file, for
     # example a secret match that the scanner already redacted. Never persisted.
     context: str | None = None
+    # Present only when the scanner named both the matched text and its replacement.
+    line_fix: LineFix | None = None
     fingerprint: str = ""
     priority: str = ""
 
@@ -121,6 +135,8 @@ class Finding:
         data["severity"] = self.severity.value
         if self.package is None:
             data.pop("package")
+        if self.line_fix is None:
+            data.pop("line_fix")
         return data
 
     @classmethod
@@ -128,6 +144,7 @@ class Finding:
         data = dict(data)
         package = data.pop("package", None)
         location = data.pop("location", None) or {}
+        line_fix = data.pop("line_fix", None)
         data.pop("context", None)
         if package:
             package["fixed_versions"] = tuple(package.get("fixed_versions") or ())
@@ -139,6 +156,7 @@ class Finding:
                 "references": tuple(data.get("references") or ()),
                 "location": Location(**location),
                 "package": Package(**package) if package else None,
+                "line_fix": LineFix(**line_fix) if line_fix else None,
             }
         )
 
@@ -171,4 +189,7 @@ def sanitize_finding(finding: Finding) -> Finding:
         package.version = _plain(package.version) or ""
         package.fixed_versions = tuple(_plain(v) or "" for v in package.fixed_versions)
         package.purl = _plain(package.purl)
+    if finding.line_fix is not None:
+        finding.line_fix.original = _plain(finding.line_fix.original) or ""
+        finding.line_fix.replacement = _plain(finding.line_fix.replacement) or ""
     return finding

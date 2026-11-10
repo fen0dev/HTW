@@ -281,6 +281,37 @@ def test_filesystem_root_is_never_an_asset(tmp_path: Path, make_scope) -> None:
     assert "too broad" in decision.reasons[0]
 
 
+def test_l2_runs_only_with_a_current_approval_for_that_control(tmp_path: Path) -> None:
+    fake_checkout(tmp_path / "checkout")
+    scope = repo_scope(tmp_path, "github.com/acme/payments", max_level="L2")
+    text = scope.read_text()
+    text = text.replace(
+        "    authorization:\n",
+        """\
+    runtime:
+      staging_url: https://staging.example.invalid
+    approvals:
+      - control: dast
+        level: L2
+        authorized_by: Jane Doe
+        authorized_on: 2026-11-01
+        expires_on: 2026-11-20
+        target: https://staging.example.invalid
+    authorization:
+""",
+    )
+    scope.write_text(text, encoding="utf-8")
+    asset = load_config(scope).assets[0]
+
+    assert ScopeGuard(NOW).check(asset, ControlLevel.L2).allowed is False
+    assert ScopeGuard(NOW).check(asset, ControlLevel.L2, control="dast").allowed
+    later = ScopeGuard(datetime(2026, 11, 21, tzinfo=UTC)).check(
+        asset, ControlLevel.L2, control="dast"
+    )
+    assert not later.allowed and "not yet in effect" not in later.reasons[0]
+    assert "expired" in later.reasons[0]
+
+
 def test_kill_switch_by_file_and_by_environment(tmp_path: Path) -> None:
     stop = tmp_path / "STOP"
     assert KillSwitch(stop, {}).reason() is None

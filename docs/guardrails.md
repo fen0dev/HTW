@@ -52,9 +52,9 @@ For `directory` assets there is nothing to check against, and the report says so
 
 | Level | Meaning | This release |
 |---|---|---|
-| L0 | Static analysis of files. Nothing is executed, nothing is contacted on the target. | Implemented. Every scanner in this release is L0. |
-| L1 | Read-only checks against running systems. | Refused: no L1 check exists yet. |
-| L2 | Active tests that need a time-bound human approval. | Refused: the approval flow does not exist yet. |
+| L0 | Static analysis of files. Nothing is executed, nothing is contacted on the target. | Implemented. Dependencies, secrets, SAST, containers, infrastructure and CI/CD are L0. |
+| L1 | Read-only checks against running systems. | Refused: no L1 check exists yet. Cloud accounts are not contacted. |
+| L2 | Active tests that need a time-bound human approval. | DAST only. Refused unless the asset's `max_level` is at least L2 and `approvals` contains a current entry for control `dast` whose `target` is exactly `runtime.staging_url`. |
 | L3 | Intrusive or potentially destructive tests. | Never run by agents. `max_level: L3` is rejected by the scope file. |
 
 An asset's `max_level` caps what may run against it. The guard checks the level of
@@ -72,8 +72,30 @@ The interface for opening proposals as pull requests enforces, in its base class
 proposals must be enabled explicitly; the asset must be in scope; only draft pull
 requests on a new `htw/` branch; no merge, no approval, no auto-merge; and a proposal
 that could reveal an unfixed weakness may only go to a destination declared private.
+`GitHubCliPublisher` is that implementation for GitHub. It clones into a temporary
+directory, pushes with `gh auth git-credential`, and closes the pull request if
+`gh` did not open it as a draft. It does not create credentials. If `git` or `gh`
+is missing, the proposal file remains and the run records why no pull request was
+opened.
 
-Code: `agents/fixer.py`, `integrations/pull_requests.py`.
+Code: `agents/fixer.py`, `integrations/pull_requests.py`, `integrations/github.py`.
+
+### Triage does not phone home unless you say so
+
+Deduplication, ranking and the obvious false-positive filters run locally. Findings
+under vendored trees are dropped for code, container, infrastructure and pipeline
+checks, not for dependency or secret findings. A secret finding in documentation is
+dropped only when its context matches a placeholder pattern.
+
+`triage.llm: true` also requires `provider` (`openai` or `anthropic`) and
+`api_key_env`, the name of an environment variable. The key is read at call time
+and is not written into the scope file, the report or the prompt. The prompt carries
+the fingerprint, rule, path, line, category, severity and a short message. It does
+not carry the secret context or the proposed patch. If the variable is unset, no
+request is made and the run is marked incomplete. The model may only mark a false
+positive, with a reason, or set confidence to low.
+
+Code: `agents/triage.py`, `core/llm.py`.
 
 ### Secrets are redacted at the source
 

@@ -152,6 +152,7 @@ class ScopeGuard:
         asset: Asset,
         level: ControlLevel = ControlLevel.L0,
         last_run_at: datetime | None = None,
+        control: str | None = None,
     ) -> ScopeDecision:
         decision = ScopeDecision(asset_id=asset.id, level=level)
         now = self.now()
@@ -177,10 +178,9 @@ class ScopeGuard:
                 f"check level {level.name} exceeds the asset's max_level {asset.max_level.name}"
             )
         elif level > MAX_AUTOMATIC_LEVEL:
-            decision.deny(
-                f"{level.name} checks need a time-bound human approval, "
-                "which this release does not implement; refusing"
-            )
+            reason = self._approval_denial(asset, level, control)
+            if reason:
+                decision.deny(reason)
 
         self._check_path(asset, decision)
         if decision.allowed:
@@ -200,6 +200,29 @@ class ScopeGuard:
                     f"(min_interval_minutes: {asset.min_interval_minutes})"
                 )
         return decision
+
+    def _approval_denial(
+        self, asset: Asset, level: ControlLevel, control: str | None
+    ) -> str | None:
+        """None when a current human approval covers this control. L3 never reaches here."""
+        if not control:
+            return f"{level.name} checks need a time-bound human approval for this asset; refusing"
+        today = self.now().date()
+        matched = [
+            approval
+            for approval in asset.approvals
+            if approval.control == control and approval.level >= level
+        ]
+        if not matched:
+            return (
+                f"{level.name} {control} checks need a time-bound human approval "
+                "for this asset; refusing"
+            )
+        if not any(item.authorized_on <= today <= item.expires_on for item in matched):
+            if all(item.expires_on < today for item in matched):
+                return f"human approval for {control} is expired; refusing"
+            return f"human approval for {control} is not yet in effect; refusing"
+        return None
 
     @staticmethod
     def _check_path(asset: Asset, decision: ScopeDecision) -> None:

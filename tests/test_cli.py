@@ -221,7 +221,19 @@ def test_doctor_lists_every_scanner_with_install_and_network_notes(
         "semgrep",
         "bandit",
         "gosec",
+        "hadolint",
+        "checkov",
+        "kics",
+        "kube-linter",
+        "zizmor",
+        "scorecard",
+        "dockle",
+        "cosign",
+        "zap",
+        "nuclei",
     ):
         assert f"[missing] {tool}:" in out
-    assert out.count("network:") == 9
+    # One network line per adapter. trivy, checkov and trivy config appear more than once
+    # because they cover more than one agent.
+    assert out.count("network:") == 23
     assert "A missing scanner is skipped with a warning" in out

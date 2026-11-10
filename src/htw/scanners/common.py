@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from htw.core.paths import to_relative
 from htw.errors import ToolError
 
 _CWE_RE = re.compile(r"CWE-\d+", re.IGNORECASE)
@@ -112,6 +113,21 @@ def cwe_ids(*values: object) -> tuple[str, ...]:
 
 def unique(values: list[str], limit: int = 8) -> tuple[str, ...]:
     return tuple(dict.fromkeys(v for v in values if isinstance(v, str) and v))[:limit]
+
+
+def repo_path(root: Path, raw: object) -> str | None:
+    """A scanner path as a POSIX path inside `root`, or None if it escapes.
+
+    Some tools prefix a relative path with `/`. That must not be read as an absolute
+    path on the machine running the scan.
+    """
+    text = str(raw or "").replace("\\", "/").strip()
+    if not text:
+        return None
+    relative = to_relative(text, root)
+    if relative is None and text.startswith("/"):
+        relative = to_relative(text.lstrip("/"), root)
+    return relative
 
 
 def http_links(values: list[Any], limit: int = 4) -> tuple[str, ...]:

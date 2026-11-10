@@ -41,9 +41,19 @@ version: 1
 # Where HTW keeps its state, audit log and reports. Keep this out of version control.
 state_dir: .htw
 
-# Report-only by default. Set to true to also write fix proposals for human review.
+# Report-only by default. Proposals are files for a person to review.
+# pull_requests opens them as drafts and never merges. private_destination is
+# required before a patch that describes an unfixed weakness may be published.
 fixes:
   propose: false
+  pull_requests: false
+  private_destination: false
+
+# Deterministic triage (deduplicate, rank, drop obvious false positives).
+# A model is off unless provider and api_key_env are set. No key is stored here.
+triage:
+  enabled: true
+  llm: false
 
 assets:
   - id: {asset_id}

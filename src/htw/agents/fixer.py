@@ -18,9 +18,10 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from htw.core.finding import DEPENDENCY, Finding
+from htw.core.finding import DEPENDENCY, Finding, LineFix
 from htw.core.fingerprint import normalize_package_name
 from htw.core.markdown import code, md
+from htw.core.redact import redact_text
 from htw.core.scoring import PRIORITIES
 from htw.detect.model import DEPENDENCY_AUTOMATION, StackProfile
 
@@ -264,7 +265,106 @@ def _priority_rank(priority: str) -> int:
     return PRIORITIES.index(priority) if priority in PRIORITIES else len(PRIORITIES)
 
 
-PROPOSERS: tuple[FixProposer, ...] = (DependencyBumpProposer(),)
+class ScannerPatchProposer(FixProposer):
+    """Turns a scanner-supplied line replacement into a patch, after checking it.
+
+    The patch is produced only when the matched text still occurs exactly once in the
+    reported line range. HTW does not invent a fix the scanner did not supply, and it
+    does not write the patch into the scanned tree.
+    """
+
+    name = "scanner-patch"
+
+    def propose(self, findings: list[Finding], ctx: FixContext) -> list[FixProposal]:
+        proposals = []
+        for finding in findings:
+            if finding.line_fix is None or finding.category == DEPENDENCY:
+                continue
+            change = apply_line_fix(ctx.root, finding)
+            if change is None:
+                continue
+            proposal = FixProposal(
+                asset_id=ctx.asset_id,
+                kind=KIND_CODE_CHANGE,
+                title=f"Apply {md(finding.tool)} fix for {md(finding.rule_id)}",
+                summary=(
+                    f"{md(finding.tool)} reported a replacement for {code(finding.rule_id)} "
+                    f"at {code(finding.location.display())}. The patch is the scanner's "
+                    "replacement of that match and nothing else."
+                ),
+                fingerprints=(finding.fingerprint,),
+                priority=finding.priority or "P2",
+                proposer=self.name,
+                changes=(change,),
+                public_safe=False,
+                notes=["Review the change and run the test suite. HTW has not applied it."],
+            )
+            proposals.append(proposal)
+        return proposals
+
+
+def apply_line_fix(root: Path, finding: Finding) -> FileChange | None:
+    """Build a one-file diff, or None when the fix cannot be checked."""
+    fix = finding.line_fix
+    location = finding.location
+    if fix is None or not location.path or not location.start_line:
+        return None
+    if not _fix_is_publishable(fix):
+        return None
+    path = root / location.path
+    try:
+        if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
+            return None
+        if path.stat().st_size > MAX_PATCHABLE_BYTES:
+            return None
+        original_text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    lines = original_text.splitlines(keepends=True)
+    start = location.start_line - 1
+    end = location.end_line or location.start_line
+    if start < 0 or end > len(lines) or end < location.start_line:
+        return None
+    span = "".join(lines[start:end])
+    if span.count(fix.original) != 1:
+        return None
+    updated_span = span.replace(fix.original, fix.replacement, 1)
+    updated = lines[:start] + _keep_lines(updated_span) + lines[end:]
+    if updated == lines:
+        return None
+    diff = "".join(
+        difflib.unified_diff(
+            lines, updated, fromfile=f"a/{location.path}", tofile=f"b/{location.path}"
+        )
+    )
+    if not diff or diff.count("\n") > 400:
+        return None
+    return FileChange(path=location.path, diff=diff)
+
+
+def _fix_is_publishable(fix: LineFix) -> bool:
+    if not fix.original.strip() or fix.original == fix.replacement:
+        return False
+    if len(fix.original) > 4_000 or len(fix.replacement) > 4_000:
+        return False
+    if fix.original.count("\n") > 40 or fix.replacement.count("\n") > 40:
+        return False
+    return (
+        redact_text(fix.original) == fix.original
+        and redact_text(fix.replacement) == fix.replacement
+    )
+
+
+def _keep_lines(text: str) -> list[str]:
+    if not text:
+        return []
+    parts = text.splitlines(keepends=True)
+    if text.endswith(("\n", "\r")):
+        return parts
+    return parts
+
+
+PROPOSERS: tuple[FixProposer, ...] = (DependencyBumpProposer(), ScannerPatchProposer())
 
 
 def propose_fixes(findings: list[Finding], ctx: FixContext) -> list[FixProposal]:

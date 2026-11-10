@@ -8,11 +8,13 @@ because a typo in a guardrail setting must never silently fall back to a default
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import re
 from dataclasses import dataclass, field
 from datetime import date, time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -32,12 +34,19 @@ PLANNED_ASSET_TYPES = (
 )
 ENVIRONMENTS = ("development", "ci", "staging", "production", "other")
 CRITICALITIES = ("low", "medium", "high", "critical")
-AGENT_NAMES = ("deps_sbom", "secrets", "sast")
+AGENT_NAMES = ("deps_sbom", "secrets", "sast", "container", "iac", "pipeline", "dast")
 AGENT_OPTIONS: dict[str, tuple[str, ...]] = {
     "deps_sbom": (),
     "secrets": ("history",),
     "sast": ("semgrep_rules",),
+    "container": (),
+    "iac": (),
+    "pipeline": (),
+    "dast": (),
 }
+APPROVAL_CONTROLS = ("dast",)
+LLM_PROVIDERS = ("openai", "anthropic")
+_API_KEY_ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,60}$")
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 _ASSET_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
@@ -88,6 +97,8 @@ class Asset:
     scanners: dict[str, AgentSettings]
     windows: tuple[TimeWindow, ...]
     min_interval_minutes: int
+    staging_url: str | None = None
+    approvals: tuple[Approval, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -98,8 +109,35 @@ class RunnerSettings:
 
 
 @dataclass(frozen=True)
+class Approval:
+    """A time-bound human approval for one control above the automatic level."""
+
+    control: str
+    level: ControlLevel
+    authorized_by: str
+    authorized_on: date
+    expires_on: date
+    target: str
+
+
+@dataclass(frozen=True)
 class FixSettings:
     propose: bool = False
+    # Open draft pull requests for proposals that have a patch. Never merges.
+    pull_requests: bool = False
+    # Required before a proposal that describes an unfixed weakness may be published.
+    private_destination: bool = False
+
+
+@dataclass(frozen=True)
+class TriageSettings:
+    """Deterministic triage is on by default. A model is never called unless configured."""
+
+    enabled: bool = True
+    llm: bool = False
+    provider: str | None = None
+    model: str | None = None
+    api_key_env: str | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +150,7 @@ class Config:
     suppressions_path: Path
     runner: RunnerSettings
     fixes: FixSettings
+    triage: TriageSettings
 
     @property
     def store_path(self) -> Path:
@@ -238,6 +277,45 @@ def _parse_time(value: object, where: str, key: str) -> time:
     raise ConfigError(f'{where}: `{key}` must be a UTC time written as "HH:MM"')
 
 
+_FORBIDDEN_HOSTS = frozenset(
+    {
+        "localhost",
+        "localhost.localdomain",
+        "metadata.google.internal",
+        "metadata.internal",
+    }
+)
+
+
+def validate_target_url(url: str, where: str) -> str:
+    """Accept an http(s) URL that names a host, and reject targets that are not an app.
+
+    Loopback, link-local and cloud metadata addresses are refused even if someone
+    writes them into the scope file: they are not the system under test.
+    """
+    parts = urlsplit(url.strip())
+    host = (parts.hostname or "").lower().rstrip(".")
+    if parts.scheme not in {"https", "http"} or not host or parts.username or parts.password:
+        raise ConfigError(
+            f"{where}: must be an http(s) URL with a host and no credentials (got {url!r})"
+        )
+    if host in _FORBIDDEN_HOSTS or host.endswith(".localhost"):
+        raise ConfigError(f"{where}: {host} is not a scannable application target")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None and (
+        address.is_loopback
+        or address.is_link_local
+        or address.is_unspecified
+        or address.is_multicast
+        or address.is_reserved
+    ):
+        raise ConfigError(f"{where}: {host} is not a scannable application target")
+    return url
+
+
 def _parse_authorization(section: _Section) -> Authorization:
     hint = (
         " A named person must authorize scanning this asset; "
@@ -280,6 +358,74 @@ def _parse_ownership(section: _Section, asset_type: str) -> Ownership:
             "remote the checkout must point to, and is verified before every scan."
         )
     return Ownership(git_remotes=remotes)
+
+
+def _parse_approvals(raw: object, where: str, staging_url: str | None) -> tuple[Approval, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigError(f"{where}: `approvals` must be a list")
+    approvals = []
+    for index, item in enumerate(raw):
+        section = _Section(item, f"{where}.approvals[{index}]")
+        control = section.choice("control", APPROVAL_CONTROLS, "dast")
+        try:
+            level = ControlLevel.parse(section.get("level", "L2"))
+        except ValueError as exc:
+            raise ConfigError(f"{section.where}: {exc}") from None
+        if level <= ControlLevel.L1:
+            raise ConfigError(
+                f"{section.where}: an approval is only meaningful above L1 "
+                "(L0 and L1 run when the asset is allowlisted)"
+            )
+        if level > MAX_DECLARABLE_LEVEL:
+            raise ConfigError(
+                f"{section.where}: L3 cannot be approved. Intrusive checks are never run by agents."
+            )
+        authorized_by = section.string("authorized_by", required=True)
+        authorized_on = _parse_date(
+            section.require("authorized_on"), section.where, "authorized_on"
+        )
+        expires_on = _parse_date(section.require("expires_on"), section.where, "expires_on")
+        target = validate_target_url(section.string("target", required=True) or "", section.where)
+        section.finish()
+        if expires_on < authorized_on:
+            raise ConfigError(f"{section.where}: `expires_on` is earlier than `authorized_on`")
+        if control == "dast" and target != staging_url:
+            raise ConfigError(
+                f"{section.where}: `target` must be exactly `runtime.staging_url`. "
+                "DAST cannot be approved for a different address than the one it will contact."
+            )
+        assert authorized_by is not None
+        approvals.append(Approval(control, level, authorized_by, authorized_on, expires_on, target))
+    return tuple(approvals)
+
+
+def _parse_triage(section: _Section) -> TriageSettings:
+    enabled = section.boolean("enabled", True)
+    llm = section.boolean("llm", False)
+    provider = section.string("provider")
+    model = section.string("model")
+    api_key_env = section.string("api_key_env")
+    section.finish()
+    if llm:
+        if provider not in LLM_PROVIDERS:
+            raise ConfigError(
+                f"{section.where}: `provider` must be one of {', '.join(LLM_PROVIDERS)} "
+                "when `llm` is true. HTW does not call a model unless the provider is named."
+            )
+        if not api_key_env or not _API_KEY_ENV_RE.match(api_key_env):
+            raise ConfigError(
+                f"{section.where}: `api_key_env` must name the environment variable that holds "
+                "the provider credential. HTW does not accept a key inline and does not invent one."
+            )
+    elif provider or model or api_key_env:
+        raise ConfigError(
+            f"{section.where}: `provider`, `model` and `api_key_env` require `llm: true`"
+        )
+    if llm and not enabled:
+        raise ConfigError(f"{section.where}: `llm: true` requires `enabled: true`")
+    return TriageSettings(enabled, llm, provider, model, api_key_env)
 
 
 def _parse_windows(raw: object, where: str) -> tuple[TimeWindow, ...]:
@@ -396,6 +542,16 @@ def _parse_asset(
     min_interval = limits.integer("min_interval_minutes", 0)
     limits.finish()
 
+    runtime = section.section("runtime")
+    staging_raw = runtime.string("staging_url")
+    runtime.finish()
+    staging_url = (
+        validate_target_url(staging_raw, f"{section.where}.runtime.staging_url")
+        if staging_raw
+        else None
+    )
+    approvals = _parse_approvals(section.get("approvals"), section.where, staging_url)
+
     owner = section.string("owner", required=True)
     assert asset_type is not None and owner is not None
     asset = Asset(
@@ -412,7 +568,32 @@ def _parse_asset(
         scanners=_parse_scanners(section.section("scanners"), defaults),
         windows=windows,
         min_interval_minutes=min_interval,
+        staging_url=staging_url,
+        approvals=approvals,
     )
+    if staging_url:
+        dast = asset.scanners["dast"]
+        scanners = dict(asset.scanners)
+        scanners["dast"] = AgentSettings(
+            dast.enabled, dast.tools, {**dast.options, "staging_url": staging_url}
+        )
+        asset = Asset(
+            id=asset.id,
+            type=asset.type,
+            path=asset.path,
+            owner=asset.owner,
+            environment=asset.environment,
+            criticality=asset.criticality,
+            max_level=asset.max_level,
+            authorization=asset.authorization,
+            ownership=asset.ownership,
+            exclude=asset.exclude,
+            scanners=scanners,
+            windows=asset.windows,
+            min_interval_minutes=asset.min_interval_minutes,
+            staging_url=staging_url,
+            approvals=approvals,
+        )
     section.finish()
     return asset
 
@@ -458,8 +639,19 @@ def load_config(path: str | Path) -> Config:
     runner_section.finish()
 
     fixes_section = root.section("fixes")
-    fixes = FixSettings(propose=fixes_section.boolean("propose", False))
+    fixes = FixSettings(
+        propose=fixes_section.boolean("propose", False),
+        pull_requests=fixes_section.boolean("pull_requests", False),
+        private_destination=fixes_section.boolean("private_destination", False),
+    )
     fixes_section.finish()
+    if fixes.pull_requests and not fixes.propose:
+        raise ConfigError(
+            f"{config_path.name}: `fixes.pull_requests` requires `fixes.propose: true`. "
+            "Pull requests are opened only for proposals, and only as drafts."
+        )
+
+    triage = _parse_triage(root.section("triage"))
 
     defaults = _parse_scanners(root.section("scanners"))
 
@@ -487,4 +679,5 @@ def load_config(path: str | Path) -> Config:
         suppressions_path=suppressions_path,
         runner=runner,
         fixes=fixes,
+        triage=triage,
     )

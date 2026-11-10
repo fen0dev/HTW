@@ -23,6 +23,16 @@ suppressions: suppressions.yaml
 # Proposals are for a person to review. HTW never applies or merges anything.
 fixes:
   propose: false
+  # pull_requests opens each proposal as a GitHub draft and never merges.
+  # private_destination must be true before a code patch may be published.
+  pull_requests: false
+  private_destination: false
+
+# Local triage. A model stays off until provider and api_key_env are set.
+# HTW reads the key from that environment variable and does not store it.
+triage:
+  enabled: true
+  llm: false
 
 # How scanner processes are run.
 runner:
@@ -58,7 +68,7 @@ assets:
     owner: payments-team           # who is responsible for this asset
     environment: production        # development | ci | staging | production | other
     criticality: critical          # low | medium | high | critical; raises or lowers priority
-    max_level: L0                  # L0 = static analysis only. This release runs nothing above L0.
+    max_level: L0                  # L0 = static files. L2 DAST needs a current approval. L3 is rejected.
     ownership:
       # host/owner/repo. The host and the owner must be written out; a wildcard is
       # allowed after them (github.com/acme/*).

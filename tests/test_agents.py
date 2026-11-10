@@ -8,7 +8,11 @@ from pathlib import Path
 import pytest
 
 from htw.agents import AGENTS
+from htw.agents.container import ContainerAgent
+from htw.agents.dast import DastAgent
 from htw.agents.deps_sbom import DepsSbomAgent
+from htw.agents.iac import IacAgent
+from htw.agents.pipeline import PipelineAgent
 from htw.agents.sast import SastAgent
 from htw.agents.secrets import SecretsAgent
 from htw.core.config import AgentSettings
@@ -50,10 +54,17 @@ def test_agents_and_their_tools() -> None:
         ("deps_sbom", ["syft", "grype", "osv-scanner", "trivy"]),
         ("secrets", ["gitleaks", "trufflehog"]),
         ("sast", ["semgrep", "bandit", "gosec"]),
+        ("container", ["hadolint", "trivy-config", "checkov", "dockle"]),
+        ("iac", ["checkov", "trivy-config", "kics", "kube-linter"]),
+        ("pipeline", ["zizmor", "checkov", "scorecard", "cosign"]),
+        ("dast", ["zap", "nuclei"]),
     ]
-    # Phase 1 is static analysis only.
-    assert all(a.level.name == "L0" for a in AGENTS)
-    assert all(t.level.name == "L0" for a in AGENTS for t in a.adapters)
+    static = [agent for agent in AGENTS if agent.name != "dast"]
+    assert all(agent.level.name == "L0" for agent in static)
+    assert all(tool.level.name == "L0" for agent in static for tool in agent.adapters)
+    dast = next(agent for agent in AGENTS if agent.name == "dast")
+    assert dast.level.name == "L2"
+    assert all(tool.level.name == "L2" for tool in dast.adapters)
 
 
 def test_with_everything_installed_one_tool_per_job_is_selected() -> None:
@@ -190,3 +201,82 @@ def test_plan_for_every_fixture_stack(stack: str, deps: list[str], sast: list[st
     assert plan(DepsSbomAgent(), STACKS / stack, ALL)[0] == deps
     assert plan(SastAgent(), STACKS / stack, ALL)[0] == sast
     assert plan(SecretsAgent(), STACKS / stack, ALL)[0] == ["gitleaks"]
+
+
+STATIC = (
+    "hadolint",
+    "trivy",
+    "checkov",
+    "kics",
+    "kube-linter",
+    "zizmor",
+    "scorecard",
+    "cosign",
+    "dockle",
+    "zap-baseline.py",
+    "nuclei",
+)
+
+
+def test_container_iac_and_pipeline_follow_the_detected_files() -> None:
+    installed = ALL + STATIC
+    # python-service has a Dockerfile, Compose and GitHub Actions, and no IaC.
+    assert plan(ContainerAgent(), STACKS / "python-service", installed)[0] == [
+        "hadolint",
+        "trivy-config",
+    ]
+    assert plan(IacAgent(), STACKS / "python-service", installed) == (
+        [],
+        [],
+        [],
+    )
+    assert (
+        not IacAgent()
+        .plan(detect_stack(STACKS / "python-service"), AgentSettings(), runner(*installed))
+        .applicable
+    )
+    assert plan(PipelineAgent(), STACKS / "python-service", installed)[0] == ["zizmor"]
+
+    # Terraform and Kubernetes are one Checkov run; zizmor does not apply.
+    assert plan(IacAgent(), STACKS / "java-terraform-aws", installed)[0] == ["checkov"]
+    assert "zizmor" not in plan(PipelineAgent(), STACKS / "java-terraform-aws", installed)[0]
+
+
+def test_static_agents_fall_back_when_the_preferred_tool_is_missing() -> None:
+    assert plan(ContainerAgent(), STACKS / "python-service", ("checkov",))[0] == ["checkov"]
+    assert plan(IacAgent(), STACKS / "go-kubernetes", ("kube-linter",))[0] == ["kube-linter"]
+    selected, _missing, uncovered = plan(PipelineAgent(), STACKS / "python-service", ("checkov",))
+    assert selected == ["checkov"]
+    assert uncovered == []
+
+
+def test_opt_in_tools_are_not_part_of_the_default_plan() -> None:
+    installed = ALL + STATIC
+    selected, missing, uncovered = plan(PipelineAgent(), STACKS / "python-service", installed)
+    assert "scorecard" not in selected and "cosign" not in selected
+    assert "scorecard" not in missing and "supply-chain:scorecard" not in uncovered
+
+    explicit = plan(
+        PipelineAgent(),
+        STACKS / "python-service",
+        installed,
+        AgentSettings(tools=("zizmor", "scorecard")),
+    )
+    assert explicit[0] == ["zizmor", "scorecard"]
+
+
+def test_dast_is_not_applicable_without_a_staging_url() -> None:
+    result = DastAgent().plan(
+        detect_stack(VULNERABLE_APP), AgentSettings(), runner("zap-baseline.py")
+    )
+    assert result.applicable is False
+    assert result.reason == "no staging URL declared"
+
+
+def test_dast_with_a_staging_url_selects_zap_and_not_nuclei() -> None:
+    settings = AgentSettings(options={"staging_url": "https://staging.example.invalid"})
+    selected, missing, uncovered = plan(
+        DastAgent(), VULNERABLE_APP, ("zap-baseline.py", "nuclei"), settings
+    )
+    assert selected == ["zap"]
+    assert missing == [] and uncovered == []

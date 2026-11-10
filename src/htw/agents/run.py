@@ -8,12 +8,14 @@ from pathlib import Path
 
 from htw.agents.base import AgentPlan
 from htw.agents.fixer import FixProposal
+from htw.agents.triage import TriageNote
 from htw.core.config import Asset
 from htw.core.finding import Finding
 from htw.core.scope import ScopeDecision
 from htw.core.store import Delta
 from htw.core.suppressions import Suppression
 from htw.detect import StackProfile
+from htw.integrations.pull_requests import PullRequestRef
 from htw.scanners.base import STATUS_ERROR, ToolOutcome
 
 REFUSED = "refused"
@@ -39,6 +41,8 @@ class AssetRun:
     suppressed: dict[str, Suppression] = field(default_factory=dict)
     expired_suppressions: list[Suppression] = field(default_factory=list)
     proposals: list[FixProposal] = field(default_factory=list)
+    pull_requests: list[PullRequestRef] = field(default_factory=list)
+    triage: list[TriageNote] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     report_dir: Path | None = None
     fixes_enabled: bool = False

@@ -26,19 +26,12 @@ from htw.core.finding import Finding
 from htw.core.markdown import code, link, md
 from htw.core.sarif import SarifEntry, SarifTool, build_sarif
 from htw.core.scoring import PRIORITIES
-from htw.detect.model import CATEGORIES, CATEGORY_TITLES, CI_CD, CONTAINER, IAC
+from htw.detect.model import CATEGORIES, CATEGORY_TITLES
 from htw.integrations.pull_requests import ProposalWriter
 from htw.scanners.base import STATUS_ERROR, STATUS_MISSING, STATUS_OK
 
 MAX_DETAILED = 50
 MAX_TABLE_ROWS = 200
-
-# Detected parts of the stack that this release has no scanner for yet.
-NOT_YET_SCANNED = {
-    CONTAINER: "container images and Dockerfiles",
-    IAC: "infrastructure as code",
-    CI_CD: "CI/CD pipelines",
-}
 
 
 def _tool_homepages() -> dict[str, str]:
@@ -233,15 +226,17 @@ def render_markdown(run: AssetRun) -> str:
         )
 
     gaps = run.gaps
-    not_scanned = [text for category, text in NOT_YET_SCANNED.items() if profile.has(category)]
-    if gaps or not_scanned:
+    if gaps:
         lines += ["", "### Not covered", ""]
         for gap in gaps:
             lines.append(f"- {md(gap)}: no installed scanner covers this. See the Scanners table.")
-        for text in not_scanned:
+
+    if run.triage:
+        lines += ["", "## Triage", ""]
+        for decision in run.triage:
             lines.append(
-                f"- {text.capitalize()} were detected, but this release of HTW has no scanner "
-                "for them yet."
+                f"- {decision.action.replace('_', ' ')}: {md(decision.title)} "
+                f"({code(decision.fingerprint)}): {md(decision.reason)}"
             )
 
     if run.suppressed or run.expired_suppressions:
@@ -271,6 +266,10 @@ def render_markdown(run: AssetRun) -> str:
             "",
             "Proposals are suggestions for a person to review. HTW did not apply any of them.",
         ]
+        if run.pull_requests:
+            lines += ["", "Draft pull requests opened for review (not merged):", ""]
+            for reference in run.pull_requests:
+                lines.append(f"- {code(reference.branch)}: {reference.url}")
 
     lines += [
         "",
@@ -322,6 +321,18 @@ def build_summary(run: AssetRun) -> dict[str, Any]:
         "proposals": [
             {"id": p.id, "title": p.title, "priority": p.priority, "has_patch": p.has_patch}
             for p in run.proposals
+        ],
+        "pull_requests": [
+            {"url": reference.url, "branch": reference.branch, "draft": reference.draft}
+            for reference in run.pull_requests
+        ],
+        "triage": [
+            {
+                "fingerprint": decision.fingerprint,
+                "action": decision.action,
+                "reason": decision.reason,
+            }
+            for decision in run.triage
         ],
     }
 
@@ -385,6 +396,7 @@ def console_summary(run: AssetRun) -> str:
         f"[{run.asset.id}] {run.status}: {len(new)} new, {len(reappeared)} reappeared, "
         f"{len(resolved)} resolved, {len(unchanged)} still open"
         + (f", {len(run.suppressed)} suppressed" if run.suppressed else "")
+        + (f", {len(run.triage)} triaged aside" if run.triage else "")
     ]
     for finding in (new + reappeared)[:10]:
         lines.append(

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from htw.core.finding import SAST, Finding, Location, Severity
-from htw.core.redact import clean_text
+from typing import Any
+
+from htw.core.finding import SAST, Finding, LineFix, Location, Severity
+from htw.core.redact import clean_text, redact_text
 from htw.detect.model import StackProfile
 from htw.errors import ConfigError, ToolError
 from htw.scanners.base import ScanContext, ToolAdapter
@@ -18,6 +20,31 @@ SUPPORTED_LANGUAGES = frozenset(
         "C#", "C", "C++", "Rust", "Swift", "Elixir", "Shell", "Solidity", "Dart", "Lua",
     }
 )  # fmt: skip
+
+_MAX_FIX_CHARS = 4_000
+_MAX_FIX_LINES = 40
+
+
+def line_fix_from_semgrep(extra: dict[str, Any]) -> LineFix | None:
+    """The autofix, kept only when it is a small replacement of the matched text.
+
+    A fix that redaction would change is dropped: the proposal must not carry a secret,
+    and a redacted fix would not apply.
+    """
+    original = extra.get("lines")
+    replacement = extra.get("fix")
+    if not isinstance(original, str) or not isinstance(replacement, str):
+        return None
+    if not original.strip() or original == replacement:
+        return None
+    if len(original) > _MAX_FIX_CHARS or len(replacement) > _MAX_FIX_CHARS:
+        return None
+    if original.count("\n") > _MAX_FIX_LINES or replacement.count("\n") > _MAX_FIX_LINES:
+        return None
+    if redact_text(original) != original or redact_text(replacement) != replacement:
+        return None
+    return LineFix(original, replacement)
+
 
 _SEVERITIES = {
     "CRITICAL": Severity.CRITICAL,
@@ -109,6 +136,7 @@ class Semgrep(ToolAdapter):
                         [metadata.get("source"), *as_list(metadata.get("references"))]
                     ),
                     confidence=str(metadata.get("confidence") or "").lower() or None,
+                    line_fix=line_fix_from_semgrep(extra),
                 )
             )
         return findings

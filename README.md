@@ -13,8 +13,10 @@ never applies them.
 > illegal where you are.
 
 **Status: phase 1 (alpha).** This release covers static analysis of source
-repositories and directories: dependencies and SBOM, secrets, and static code
-analysis. It is report-only by default. See [Limitations](#limitations) for what it
+repositories and directories: dependencies and SBOM, secrets, static code
+analysis, container files, infrastructure as code, and CI/CD workflow files.
+Runtime tests stay off unless a person has approved one staging URL. It is
+report-only by default. See [Limitations](#limitations) for what it
 does not do yet.
 
 ## What phase 1 does
@@ -25,13 +27,18 @@ does not do yet.
 - **Automatic stack detection.** Languages, package managers, containers,
   infrastructure as code, cloud providers and CI/CD systems are detected from the
   files, and the detected stack decides which scanners run.
-- **Three scanner agents**, each a thin wrapper around tools you may already use:
+- **Scanner agents**, each a thin wrapper around tools you may already use. Nothing
+  here builds an image, applies infrastructure, or contacts a cloud account:
 
   | Agent | What it finds | Tools, in order of preference |
   |---|---|---|
   | Dependencies and SBOM | Known vulnerabilities in dependencies; a CycloneDX SBOM | Syft, then Grype, OSV-Scanner or Trivy |
   | Secrets | Credentials in files and in git history | Gitleaks or TruffleHog |
   | Static analysis (SAST) | Unsafe code patterns | Semgrep; Bandit (Python) and gosec (Go) as fallbacks |
+  | Containers | Dockerfile and Compose misconfiguration, from the files only | Hadolint, then Trivy config or Checkov. Dockle is opt-in and only reads a local `.tar` |
+  | Infrastructure as code | Terraform, CloudFormation, Kubernetes, Ansible and the other formats the detector already names | Checkov, then Trivy config, KICS or kube-linter |
+  | CI/CD | Workflow misconfiguration for the CI systems the detector recognizes | zizmor (GitHub Actions, offline) or Checkov. OpenSSF Scorecard and cosign are opt-in |
+  | Runtime (DAST) | Passive checks against one approved staging URL | ZAP baseline. Nuclei is opt-in. Refused unless a current L2 approval names that exact URL |
 
 - **Only what changed.** Findings get a stable fingerprint that survives code moving
   around, so a nightly scan tells you what is new, reappeared or resolved instead of
@@ -39,17 +46,20 @@ does not do yet.
 - **Normalized output.** One Markdown report and one SARIF 2.1.0 file per run,
   whatever mix of scanners produced the findings.
 - **Fix proposals for human review** (off by default): the target version for a
-  vulnerable dependency and, where the edit is unambiguous, a patch file. Never
-  applied, never merged.
+  vulnerable dependency, a patch when the scanner supplies a small safe edit, and,
+  only when you turn it on, a draft pull request. Never applied, never merged.
 - **Guardrails throughout**: kill switch, scan windows and rate limits, secrets
   redacted at the source, scanners run with a scrubbed environment and timeouts, a
   tamper-evident audit log, suppressions that must be justified and expire.
 
-**What "agents" means here.** In this phase the agents are deterministic: an
-orchestrator and three scanner agents with a common interface. Phase 1 makes no calls
-to any language model and sends your code to no AI service. The agents that reason
-with a model (triage of findings, deeper code review, fix generation) are planned for
-later phases and plug into the same pipeline.
+**What "agents" means here.** The agents are deterministic: an orchestrator and one
+scanner agent per kind of check, behind a common interface. Triage (deduplicate,
+rank, drop obvious false positives) is on by default and does not call a model.
+An optional model can mark a finding as a likely false positive, and it stays off
+until the scope file names a provider and an environment variable that already
+holds the key. HTW never stores that key and never sends a secret value or a
+source snippet. Deep code review and generated fixes beyond a scanner-supplied
+patch are not in this release.
 
 ## Install
 
@@ -79,7 +89,10 @@ htw doctor      # shows which scanners are installed
 
 HTW wraps external scanners and bundles none of them. Install the ones you want.
 Where several tools can do the same job, HTW prefers Grype, then OSV-Scanner, then
-Trivy; Gitleaks, then TruffleHog; and Semgrep, then Bandit and gosec.
+Trivy; Gitleaks, then TruffleHog; Semgrep, then Bandit and gosec; Hadolint, then
+Trivy config or Checkov; Checkov, then Trivy config, KICS or kube-linter; and
+zizmor, then Checkov, for GitHub Actions. Opt-in tools (Dockle, Scorecard, cosign,
+Nuclei) are listed by `htw doctor` and run only when `tools:` names them.
 
 | Tool | Agent | Install | Tested with |
 |---|---|---|---|
@@ -92,10 +105,16 @@ Trivy; Gitleaks, then TruffleHog; and Semgrep, then Bandit and gosec.
 | [Semgrep](https://github.com/semgrep/semgrep) | Static analysis | `pipx install semgrep` or `brew install semgrep` | 1.185.0 |
 | [Bandit](https://github.com/PyCQA/bandit) | Static analysis (Python) | `pipx install bandit` | 1.9.4 |
 | [gosec](https://github.com/securego/gosec) | Static analysis (Go) | `go install github.com/securego/gosec/v2/cmd/gosec@latest` (also needs the Go toolchain at scan time) | 2.30.0 |
+| [Hadolint](https://github.com/hadolint/hadolint) | Containers | `brew install hadolint`, or a [release binary](https://github.com/hadolint/hadolint/releases) | — |
+| [Trivy](https://github.com/aquasecurity/trivy) `config` | Containers, infrastructure | same binary as above; HTW passes `--skip-db-update` and never `trivy image` | 0.76.2 |
+| [Checkov](https://github.com/bridgecrewio/checkov) | Containers, infrastructure, CI/CD | `pipx install checkov` | — |
+| [KICS](https://github.com/Checkmarx/kics) | Infrastructure | `brew install kics`, or a [release binary](https://github.com/Checkmarx/kics/releases) | — |
+| [kube-linter](https://github.com/stackrox/kube-linter) | Kubernetes manifests | `brew install kube-linter`, or a [release binary](https://github.com/stackrox/kube-linter/releases) | — |
+| [zizmor](https://github.com/zizmorcore/zizmor) | GitHub Actions | `brew install zizmor`, or a [release binary](https://github.com/zizmorcore/zizmor/releases) | 1.32.0 |
 
-A reasonable minimum is **Syft, Grype, Gitleaks and Semgrep**. Install scanners from
-their official releases and verify the published checksums: HTW runs whatever your
-`PATH` resolves.
+A reasonable minimum is **Syft, Grype, Gitleaks and Semgrep**, plus **zizmor** when
+the repository uses GitHub Actions. Install scanners from their official releases
+and verify the published checksums: HTW runs whatever your `PATH` resolves.
 
 **If a scanner is missing, HTW does not fail.** It prints a warning with the install
 command, tries the next tool that can do the same job, runs everything else, and
@@ -269,20 +288,29 @@ With `fixes.propose: true`, each run also writes proposals to
 `reports/<asset>/<run>/proposals/`: one Markdown file per proposal and a `.patch`
 file where a patch could be derived.
 
-In this release proposals cover vulnerable dependencies. HTW works out the lowest
-version that fixes every advisory against a package. It writes a patch only when the
-edit is unambiguous (an exact `==` pin without hashes in a requirements file);
-otherwise it states the target version and leaves the upgrade to your package manager
-so that lockfiles stay consistent. If Dependabot or Renovate is configured, the
-proposal says so and defers to it.
+Proposals cover two cases:
 
-HTW does not apply a proposal, does not push a branch and does not open a pull
-request. A person reviews the proposal and applies it. The interface for opening
-proposals as draft pull requests exists
-([`PullRequestPublisher`](src/htw/integrations/pull_requests.py)) and enforces the
-rules in one place: enabled explicitly, asset in scope, draft only, never merge, and
-nothing that would disclose an unfixed weakness to a public destination. No
-implementation for a specific forge ships yet.
+- **Vulnerable dependencies.** HTW works out the lowest version that fixes every
+  advisory against a package. It writes a patch only when the edit is unambiguous
+  (an exact `==` pin without hashes in a requirements file); otherwise it states the
+  target version and leaves the upgrade to your package manager so that lockfiles
+  stay consistent. If Dependabot or Renovate is configured, the proposal says so
+  and defers to it.
+- **A scanner-supplied fix.** When Semgrep returns a small replacement for the
+  flagged lines, and that text still matches the file in exactly one place, HTW
+  writes a unified diff. The tree being scanned is not modified. A replacement that
+  looks like a credential is dropped.
+
+HTW does not apply a proposal. With `fixes.pull_requests: true` it can open the
+proposal as a **draft** pull request on GitHub, using the `git` and `gh` binaries
+and the login `gh` already has. HTW does not create a token. The branch is pushed
+from a temporary clone, never from the checkout that was scanned. If the pull
+request is not a draft, HTW closes it and records the failure. Nothing is merged.
+
+A patch that describes an unfixed weakness (every scanner-supplied code fix) is
+refused unless `fixes.private_destination: true`. A dependency bump for a published
+advisory may go to a public repository. The rules live in
+[`PullRequestPublisher`](src/htw/integrations/pull_requests.py).
 
 ## Guardrails
 
@@ -291,8 +319,11 @@ The full list, with where each is implemented and its current limits, is in
 
 - **Deny by default.** Only assets in the scope file, only while authorized.
 - **Ownership check** against the declared git remote before every scan.
-- **Static analysis only (L0).** Nothing is executed on, or sent to, the systems you
-  scan. Higher levels are refused; intrusive testing (L3) can never be configured.
+- **Static analysis (L0) unless a person approves more.** Container, infrastructure
+  and CI checks read files only. Runtime tests (L2) run only against one staging
+  URL named in a current approval, and they refuse without it. Read-only checks of
+  live cloud accounts (L1) are not in this release. Intrusive testing (L3) can
+  never be configured.
 - **Report-only by default; fixes are never auto-applied.**
 - **Secrets are redacted at the source.** Reports, SARIF, the state database and the
   audit log hold the location and kind of a secret, never its value.
@@ -320,6 +351,11 @@ rules or vulnerability data. `htw doctor` prints this for the scanners you have.
 | OSV-Scanner | Sends package names and versions to osv.dev (and deps.dev, to resolve transitive dependencies). No source code. |
 | Semgrep | Downloads rulesets from semgrep.dev unless `semgrep_rules` points to local rule files. HTW disables its metrics and version check. No code is uploaded. |
 | gosec | The Go toolchain may download modules the scanned code depends on. |
+| Hadolint, KICS, kube-linter, zizmor, cosign, Dockle | None. zizmor is passed `--offline`. Dockle is only given a local image archive. cosign verifies a blob with a key file inside the asset. |
+| Checkov | None with the flags HTW passes: external modules are not downloaded and results are not uploaded. |
+| Trivy `config` | `--skip-db-update`. A missing local vulnerability cache may still be fetched once; the files stay local. |
+| OpenSSF Scorecard | Opt-in. Local mode can still contact GitHub. HTW adds no token. |
+| ZAP, Nuclei | Only the staging URL in the current approval. Refused otherwise. No other host is passed on the command line, and a Nuclei match for any other origin is dropped. |
 
 To keep everything on the machine, set `tools:` explicitly in the scope file (for
 example Syft, Gitleaks and Bandit) and point `semgrep_rules` at local rules.
@@ -331,21 +367,32 @@ What this release does not do. Each item is planned unless noted.
 - **Assets:** repositories and directories only. Container images, cloud accounts,
   clusters and running applications are rejected by the scope file with a message
   saying so.
-- **Scanners:** when containers, infrastructure as code or CI/CD pipelines are
-  detected, the report says they were not scanned. There are no agents for them yet.
-- **No LLM-based agents:** no automated triage, deep code review or generated code
-  fixes. Expect false positives from the scanners; the first scans of a codebase need
-  a pass of manual suppressions.
+- **No live cloud, cluster or image-registry scanning.** Container and
+  infrastructure checks read the files in the checkout. Dockle refuses to pull an
+  image. Prowler, kube-bench and similar read-only checks of running systems are
+  not in this release.
+- **Runtime tests need a decision you record yourself.** DAST runs only with
+  `max_level: L2`, `runtime.staging_url`, and an `approvals` entry for control
+  `dast` whose target is that exact URL and whose dates include today. Loopback,
+  link-local and cloud metadata addresses are rejected. Without that record the
+  agent does not run and does not open a network connection.
+- **Triage is deterministic.** It drops SAST, container, infrastructure and
+  pipeline findings under vendored and virtualenv trees, drops secret findings in
+  documentation only when the context looks like a placeholder, and collapses two
+  tools' reports of the same CWE at the same line or the same advisory on the same
+  package. A model is optional (`triage.llm`) and off by default; with no provider
+  configured, HTW makes no network call. The model may only mark a false positive
+  or lower confidence. It does not receive secret context or a proposed patch.
 - **No sandbox** around scanners, and no network egress control. See
   [docs/guardrails.md](docs/guardrails.md#current-limits).
-- **No approval flow**, so nothing above L0 can run.
-- **Reports go to files.** No issue tracker or chat integration, and no pull request
-  publisher for a specific forge.
-- **Priority is simple:** scanner severity adjusted by asset criticality. No
-  exploitability (EPSS, CISA KEV) or reachability data.
-- **No cross-tool deduplication for code findings.** If you run two SAST tools they
-  may report the same problem twice. Dependency findings are stable across tools only
-  when the tools use the same advisory id.
+- **Reports go to files.** No issue tracker or chat integration. Draft pull
+  requests are GitHub only, and only when `fixes.pull_requests` is true.
+- **Priority is simple:** scanner severity adjusted by asset criticality, then
+  lowered one step when triage marks confidence as low (secret findings keep
+  their priority). No exploitability (EPSS, CISA KEV) or reachability data.
+- **Deduplication is conservative.** Two different advisories on one package stay
+  separate. Two findings from the same tool stay separate. Code findings collapse
+  across tools only when they share a CWE, a path and a line.
 - **Secrets, history mode:** for a git checkout the secrets scanner reads committed
   content, so files that are not committed yet are not scanned. Set `history: false`
   to scan the files in the working tree instead.

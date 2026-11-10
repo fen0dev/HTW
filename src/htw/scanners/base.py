@@ -70,6 +70,10 @@ class ToolAdapter(ABC):
     network: ClassVar[str] = "none"
     level: ClassVar[ControlLevel] = ControlLevel.L0
     version_args: ClassVar[tuple[str, ...]] = ("--version",)
+    # Opt-in tools are listed by `htw doctor` but are not selected unless the scope
+    # file names them. They stay out of the coverage gaps, so a default scan does not
+    # fail `--strict` for a check the operator did not ask for.
+    optional: ClassVar[bool] = False
 
     @abstractmethod
     def coverage(self, profile: StackProfile) -> set[str]:

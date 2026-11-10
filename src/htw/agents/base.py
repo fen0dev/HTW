@@ -50,6 +50,8 @@ class ScannerAgent(ABC):
     name: ClassVar[str]
     title: ClassVar[str]
     level: ClassVar[ControlLevel] = ControlLevel.L0
+    # When set, a check above L1 is allowed only with a matching, unexpired approval.
+    approval_control: ClassVar[str] = ""
     adapters: ClassVar[tuple[ToolAdapter, ...]]
 
     @abstractmethod
@@ -92,12 +94,17 @@ class ScannerAgent(ABC):
         )
         covered: set[str] = set()
         for adapter in candidates:
-            provides = adapter.coverage(profile) & set(needed)
-            if not provides or (not explicit and provides <= covered):
+            if adapter.optional and not explicit:
+                continue
+            provides = adapter.coverage(profile)
+            # An opt-in tool named in the scope file runs even though its coverage is
+            # not part of the default plan, and therefore not part of the gaps.
+            relevant = provides if adapter.optional else provides & set(needed)
+            if not relevant or (not explicit and relevant <= covered):
                 continue
             if adapter.available(runner):
                 plan.selected.append(adapter)
-                covered |= provides
+                covered |= relevant & set(needed)
             else:
                 plan.missing.append(adapter)
         plan.uncovered = {key: text for key, text in needed.items() if key not in covered}

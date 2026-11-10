@@ -16,6 +16,7 @@ from htw.agents.fixer import (
     target_version,
 )
 from htw.core.config import load_config
+from htw.core.finding import LineFix
 from htw.core.fingerprint import assign_fingerprints
 from htw.core.levels import ControlLevel
 from htw.core.scope import ScopeDecision
@@ -331,6 +332,37 @@ def test_publisher_requires_a_patch_and_a_draft(asset) -> None:
         RecordingPublisher(enabled=True).publish(proposal(changes=()), asset, allowed())
     with pytest.raises(ScopeViolation, match="not a draft"):
         RecordingPublisher(enabled=True, draft=False).publish(proposal(), asset, allowed())
+
+
+def test_scanner_supplied_fix_becomes_a_patch_and_is_not_applied(tmp_path: Path) -> None:
+    source = "def run(q):\n    return eval(q)\n"
+    ctx = context(tmp_path, {"app/server.py": source})
+    finding = sast_finding(line=2)
+    finding.line_fix = LineFix("eval(q)", "literal(q)")
+    (proposal,) = propose_fixes(prepared(finding), ctx)
+
+    assert proposal.kind == "code_change"
+    assert proposal.public_safe is False
+    assert "literal(q)" in proposal.patch and "eval(q)" in proposal.patch
+    assert (tmp_path / "app" / "server.py").read_text() == source
+    # The scanned tree is the context root; the proposal must not edit it.
+    assert (ctx.root / "app" / "server.py").read_text() == source
+
+
+def test_scanner_fix_is_dropped_when_the_file_does_not_match(tmp_path: Path) -> None:
+    ctx = context(tmp_path, {"app/server.py": "def run(q):\n    return safe(q)\n"})
+    finding = sast_finding(line=2)
+    finding.line_fix = LineFix("eval(q)", "literal(q)")
+
+    assert propose_fixes(prepared(finding), ctx) == []
+
+
+def test_scanner_fix_is_dropped_when_it_contains_a_secret(tmp_path: Path) -> None:
+    ctx = context(tmp_path, {"app/server.py": "token = 'ghp_" + "a" * 36 + "'\n"})
+    finding = sast_finding(path="app/server.py", line=1)
+    finding.line_fix = LineFix("ghp_" + "a" * 36, "os.environ['TOKEN']")
+
+    assert propose_fixes(prepared(finding), ctx) == []
 
 
 def test_branch_names_are_safe(asset) -> None:
