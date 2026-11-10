@@ -58,6 +58,51 @@ def test_two_advisories_for_one_package_are_not_collapsed() -> None:
     assert kept == [first, second] and notes == []
 
 
+def test_the_same_ghsa_from_two_tools_collapses_without_changing_fingerprints() -> None:
+    grype = dependency_finding("GHSA-aaaa-bbbb-cccc", tool="grype", severity=Severity.HIGH)
+    trivy = dependency_finding("GHSA-aaaa-bbbb-cccc", tool="trivy", severity=Severity.MEDIUM)
+    other = dependency_finding("GHSA-cccc-dddd-eeee", tool="osv-scanner")
+    other_package = dependency_finding("GHSA-aaaa-bbbb-cccc", name="requests", tool="trivy")
+    grype.fingerprint = "fp-grype"
+    trivy.fingerprint = "fp-trivy"
+    other.fingerprint = "fp-other"
+    other_package.fingerprint = "fp-requests"
+
+    kept, notes = triage_findings([trivy, grype, other, other_package], environment="development")
+
+    assert kept == [grype, other, other_package]
+    assert [item.fingerprint for item in kept] == ["fp-grype", "fp-other", "fp-requests"]
+    assert notes[0].action == "duplicate"
+    assert notes[0].fingerprint == "fp-trivy"
+    assert "fp-grype" in notes[0].reason
+
+
+def test_the_same_cve_from_two_tools_still_collapses() -> None:
+    grype = dependency_finding("CVE-2024-0001", tool="grype", severity=Severity.HIGH)
+    trivy = dependency_finding("CVE-2024-0001", tool="trivy", severity=Severity.LOW)
+    grype.identifiers = ("CVE-2024-0001",)
+    trivy.identifiers = ("CVE-2024-0001", "CWE-79")
+    grype.fingerprint, trivy.fingerprint = "fp-grype", "fp-trivy"
+
+    kept, notes = triage_findings([trivy, grype], environment="production")
+
+    assert kept == [grype]
+    assert grype.fingerprint == "fp-grype"
+    assert notes[0].fingerprint == "fp-trivy"
+
+
+def test_environment_does_not_change_priority() -> None:
+    production = sast_finding()
+    development = sast_finding()
+    production.priority = "P1"
+    development.priority = "P1"
+
+    triage_findings([production], environment="production")
+    triage_findings([development], environment="development")
+
+    assert production.priority == development.priority == "P1"
+
+
 def test_low_confidence_lowers_priority_except_for_secrets() -> None:
     code = sast_finding()
     code.priority = "P1"
@@ -132,9 +177,12 @@ def test_configured_llm_reads_the_named_variable_and_no_other_secret(
     assert kept == [finding] and notes == []
     assert seen["url"] == "https://api.openai.com/v1/chat/completions"
     assert seen["authorization"] == "Bearer sk-test-from-the-environment"
-    body = str(seen["body"])
-    assert "super-secret-line" not in body
-    assert "htw1:abc" in body
+    body = json.loads(str(seen["body"]))
+    assert body["model"] == "gpt-4.1-mini"
+    assert body["max_tokens"] == 384
+    encoded = json.dumps(body)
+    assert "super-secret-line" not in encoded
+    assert "htw1:abc" in encoded
 
 
 def test_missing_api_key_does_not_call_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -153,3 +201,194 @@ def test_missing_api_key_does_not_call_the_provider(monkeypatch: pytest.MonkeyPa
 
     assert notes[0].action == "error"
     assert "does not invent credentials" in notes[0].reason
+
+
+def _reply(findings: list[dict[str, object]]) -> bytes:
+    return json.dumps(
+        {"choices": [{"message": {"content": json.dumps({"findings": findings})}}]}
+    ).encode()
+
+
+def test_model_sees_only_findings_local_triage_left_unsettled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, str] = {}
+
+    def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
+        del url, headers
+        seen["body"] = body.decode()
+        return _reply([])
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    client = HttpLlm(
+        TriageSettings(llm=True, provider="openai", api_key_env="OPENAI_API_KEY"),
+        transport,
+    )
+    high = sast_finding(path="app/high.py")
+    high.confidence = "high"
+    high.fingerprint = "htw1:high"
+    medium = sast_finding(path="app/medium.py")
+    medium.confidence = "medium"
+    medium.fingerprint = "htw1:medium"
+    medium.message = "M" * 400
+    vendor = sast_finding(path="vendor/lib.py")
+    vendor.fingerprint = "htw1:vendor"
+
+    kept, notes = triage_findings([high, medium, vendor], environment="production", llm=client)
+
+    assert high in kept and medium in kept
+    assert vendor not in kept
+    assert notes[0].fingerprint == "htw1:vendor" and notes[0].action == "false_positive"
+    assert seen["body"].count("htw1:medium") == 1
+    assert "htw1:high" not in seen["body"]
+    assert "htw1:vendor" not in seen["body"]
+    assert "M" * 160 in seen["body"]
+    assert "M" * 161 not in seen["body"]
+
+
+def test_a_classified_fingerprint_is_not_sent_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    calls = {"n": 0}
+
+    def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
+        del url, headers, body
+        calls["n"] += 1
+        return _reply(
+            [
+                {
+                    "fingerprint": "htw1:once",
+                    "false_positive": True,
+                    "confidence": "high",
+                    "reason": "test fixture, not a real issue",
+                }
+            ]
+        )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    client = HttpLlm(
+        TriageSettings(llm=True, provider="openai", api_key_env="OPENAI_API_KEY"),
+        transport,
+    )
+
+    def finding() -> object:
+        item = sast_finding()
+        item.confidence = "medium"
+        item.fingerprint = "htw1:once"
+        return item
+
+    first, notes = triage_findings(
+        [finding()], environment="production", llm=client, state_dir=tmp_path
+    )
+    second, again = triage_findings(
+        [finding()], environment="production", llm=client, state_dir=tmp_path
+    )
+
+    assert first == [] and second == []
+    assert calls["n"] == 1
+    assert notes[0].reason == again[0].reason
+    assert "test fixture" in notes[0].reason
+
+
+def test_confirming_low_confidence_does_not_lower_priority_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
+        del url, headers, body
+        return _reply(
+            [
+                {
+                    "fingerprint": "htw1:low",
+                    "false_positive": False,
+                    "confidence": "low",
+                    "reason": "",
+                }
+            ]
+        )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    client = HttpLlm(
+        TriageSettings(llm=True, provider="openai", api_key_env="OPENAI_API_KEY"),
+        transport,
+    )
+    code = sast_finding()
+    code.priority = "P1"
+    code.confidence = "low"
+    code.fingerprint = "htw1:low"
+
+    triage_findings([code], environment="production", llm=client)
+
+    assert code.priority == "P2"
+    assert code.confidence == "low"
+
+
+def test_anthropic_asks_for_a_short_completion(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
+        del url, headers
+        seen["body"] = json.loads(body)
+        return json.dumps({"content": [{"text": json.dumps({"findings": []})}]}).encode()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    client = HttpLlm(
+        TriageSettings(llm=True, provider="anthropic", api_key_env="ANTHROPIC_API_KEY"),
+        transport,
+    )
+    one = sast_finding()
+    one.fingerprint = "htw1:one"
+    triage_findings([one], environment="development", llm=client)
+    assert seen["body"]["max_tokens"] == 384
+    assert seen["body"]["model"] == "claude-sonnet-4-5"
+
+    two = [sast_finding(path="app/a.py"), sast_finding(path="app/b.py")]
+    two[0].fingerprint = "htw1:a"
+    two[1].fingerprint = "htw1:b"
+    triage_findings(two, environment="development", llm=client)
+    assert seen["body"]["max_tokens"] == 640
+
+
+def test_a_truncated_reply_is_not_applied(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
+        del url, headers, body
+        return json.dumps(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "findings": [
+                                        {
+                                            "fingerprint": "htw1:cut",
+                                            "false_positive": True,
+                                            "confidence": "high",
+                                            "reason": "incomplete",
+                                        }
+                                    ]
+                                }
+                            )
+                        },
+                    }
+                ]
+            }
+        ).encode()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    client = HttpLlm(
+        TriageSettings(llm=True, provider="openai", api_key_env="OPENAI_API_KEY"),
+        transport,
+    )
+    finding = sast_finding()
+    finding.fingerprint = "htw1:cut"
+    finding.confidence = "medium"
+
+    kept, notes = triage_findings(
+        [finding], environment="production", llm=client, state_dir=tmp_path
+    )
+
+    assert kept == [finding]
+    assert notes[0].action == "error"
+    assert "truncated" in notes[0].reason
+    assert not (tmp_path / "cache" / "llm-triage.json").exists()

@@ -296,7 +296,12 @@ class Orchestrator:
                 run.notes.append(feed_note)
         if self.config.triage.enabled:
             llm = client_for(self.config.triage) if self.config.triage.llm else None
-            findings, run.triage = triage_findings(findings, environment=asset.environment, llm=llm)
+            findings, run.triage = triage_findings(
+                findings,
+                environment=asset.environment,
+                llm=llm,
+                state_dir=self.config.state_dir if llm is not None else None,
+            )
             for note in run.triage:
                 if note.action == "error":
                     run.status = INCOMPLETE
