@@ -205,6 +205,10 @@ listed here so that nobody has to discover them.
   scanners from their official releases and verify the checksums.
 - **Some scanners use the network** to fetch rules or advisory data. See
   [What leaves your machine](../README.md#what-leaves-your-machine).
+- **Priority enrichment uses two public feeds.** CISA KEV and FIRST EPSS are
+  downloaded only for CVE ids already present on a finding, cached for a day, and
+  ignored when unavailable so priority is not raised. The request carries no
+  credentials and no source text. Reachability is not scored.
 - **The kill switch is local.** It stops HTW on the machine where it is set.
 - **The audit log is tamper-evident, not tamper-proof**, and only as trustworthy as
   the storage it is kept on.

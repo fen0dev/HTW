@@ -58,7 +58,8 @@ src/htw/
     fingerprint.py       stable finding identity
     store.py             SQLite state: new / unchanged / resolved / reappeared
     suppressions.py      reviewed, expiring suppressions
-    scoring.py           priority P0-P3
+    scoring.py           priority P0-P3 from severity and criticality
+    exploitability.py    optional raise from public EPSS and CISA KEV
     redact.py            masking of credential-like text
     markdown.py          escaping of scanner-supplied text in reports
     sarif.py             SARIF 2.1.0 output
@@ -183,8 +184,13 @@ The **store** compares each run with the state the previous one left:
 A finding is only resolved when the tool that reported it ran to completion. A missing
 or failed scanner never makes findings disappear.
 
-**Priority** (P0 to P3) is the scanner's severity adjusted by the asset's criticality.
-It is deliberately simple; exploitability and reachability data are planned.
+**Priority** (P0 to P3) starts from the scanner's severity adjusted by the asset's
+criticality. When a finding carries a CVE id, the run can raise that priority from
+the public CISA KEV catalog (one step) and from FIRST EPSS when the score is at
+least 0.10 (one step). The steps stack and stop at P0. The feeds are fetched during
+the run, cached for 24 hours, and a missing or failed feed does not raise priority.
+Nothing is lowered because a score is low or a CVE is absent. Reachability is not
+part of this score.
 
 ## Output
 

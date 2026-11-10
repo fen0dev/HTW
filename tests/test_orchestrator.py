@@ -157,7 +157,7 @@ class Harness:
         entry = {"id": "app", "path": "project", "extra": extra or "exclude: [vendor]", **asset}
         (self.tmp / "htw.yaml").write_text(scope_yaml([entry], top), encoding="utf-8")
 
-    def scan(self, environ: dict[str, str] | None = None):
+    def scan(self, environ: dict[str, str] | None = None, feed_transport=None):
         self.clock += timedelta(hours=1)
         config = load_config(self.tmp / "htw.yaml")
         orchestrator = Orchestrator(
@@ -165,6 +165,7 @@ class Harness:
             now=lambda: self.clock,
             runner=self.scanners.runner,  # type: ignore[arg-type]
             environ=environ or {},
+            feed_transport=feed_transport,
         )
         return orchestrator.scan()[0]
 

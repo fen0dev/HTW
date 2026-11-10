@@ -143,6 +143,13 @@ class TriageSettings:
 
 
 @dataclass(frozen=True)
+class ExploitabilitySettings:
+    """Public EPSS and CISA KEV. Disabled means the run does not fetch them."""
+
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
 class Config:
     path: Path
     base_dir: Path
@@ -153,6 +160,7 @@ class Config:
     runner: RunnerSettings
     fixes: FixSettings
     triage: TriageSettings
+    exploitability: ExploitabilitySettings
 
     @property
     def store_path(self) -> Path:
@@ -430,6 +438,12 @@ def _parse_triage(section: _Section) -> TriageSettings:
     return TriageSettings(enabled, llm, provider, model, api_key_env)
 
 
+def _parse_exploitability(section: _Section) -> ExploitabilitySettings:
+    enabled = section.boolean("enabled", True)
+    section.finish()
+    return ExploitabilitySettings(enabled)
+
+
 def _parse_windows(raw: object, where: str) -> tuple[TimeWindow, ...]:
     if raw is None:
         return ()
@@ -668,6 +682,7 @@ def load_config(path: str | Path) -> Config:
         )
 
     triage = _parse_triage(root.section("triage"))
+    exploitability = _parse_exploitability(root.section("exploitability"))
 
     defaults = _parse_scanners(root.section("scanners"))
 
@@ -696,4 +711,5 @@ def load_config(path: str | Path) -> Config:
         runner=runner,
         fixes=fixes,
         triage=triage,
+        exploitability=exploitability,
     )

@@ -344,8 +344,15 @@ unprivileged user on a machine that holds no credentials it does not need.
 
 ## What leaves your machine
 
-HTW itself makes no network connections. Some of the scanners it runs do, to fetch
-rules or vulnerability data. `htw doctor` prints this for the scanners you have.
+When a finding carries a CVE id and `exploitability.enabled` is true (the default),
+HTW downloads two public feeds: the CISA Known Exploited Vulnerabilities catalog
+and FIRST EPSS scores for those CVE ids. The request sends only the CVE ids. There
+is no API key. Responses are cached under the state directory for 24 hours. Set
+`exploitability.enabled: false` to skip the downloads. If a feed cannot be fetched,
+priority is left unchanged.
+
+Some of the scanners HTW runs also use the network, to fetch rules or vulnerability
+data. `htw doctor` prints this for the scanners you have.
 
 | Tool | Network use |
 |---|---|
@@ -398,9 +405,12 @@ What this release does not do. Each item is planned unless noted.
   [docs/guardrails.md](docs/guardrails.md#current-limits).
 - **Reports go to files.** No issue tracker or chat integration. Draft pull
   requests are GitHub only, and only when `fixes.pull_requests` is true.
-- **Priority is simple:** scanner severity adjusted by asset criticality, then
-  lowered one step when triage marks confidence as low (secret findings keep
-  their priority). No exploitability (EPSS, CISA KEV) or reachability data.
+- **Priority starts from severity and asset criticality**, then rises one step
+  when a CVE is in the CISA KEV catalog and one more when its EPSS score is at
+  least 0.10, capped at P0. Both steps require a feed fetched during the run or
+  a cache less than 24 hours old. An unavailable feed does not raise priority,
+  and a low score does not lower it. Triage then lowers a low-confidence finding
+  by one step (secret findings keep their priority). Reachability is not scored.
 - **Deduplication is conservative.** Two different advisories on one package stay
   separate. Two findings from the same tool stay separate. Code findings collapse
   across tools only when they share a CWE, a path and a line.

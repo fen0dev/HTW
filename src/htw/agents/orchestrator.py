@@ -21,6 +21,7 @@ from htw.agents.run import COMPLETE, INCOMPLETE, REFUSED, STOPPED, AssetRun
 from htw.agents.triage import triage_findings
 from htw.core.audit import AuditLog, initiator
 from htw.core.config import Asset, Config
+from htw.core.exploitability import Get, apply_exploitability
 from htw.core.finding import Finding, sanitize_finding
 from htw.core.fingerprint import assign_fingerprints
 from htw.core.levels import ControlLevel
@@ -49,6 +50,7 @@ class Orchestrator:
         agents: Sequence[ScannerAgent] = AGENTS,
         environ: dict[str, str] | None = None,
         publisher: PullRequestPublisher | None = None,
+        feed_transport: Get | None = None,
     ):
         self.config = config
         self._now = now or (lambda: datetime.now(UTC))
@@ -65,6 +67,7 @@ class Orchestrator:
         self.audit = AuditLog(config.audit_path)
         self._environ = environ
         self._publisher = publisher
+        self._feed_transport = feed_transport
 
     def select_assets(self, asset_ids: Sequence[str] | None) -> list[Asset]:
         if not asset_ids:
@@ -282,6 +285,15 @@ class Orchestrator:
         asset = run.asset
         assign_fingerprints(findings, asset.path)
         assign_priorities(findings, asset.criticality)
+        if self.config.exploitability.enabled:
+            feed_note = apply_exploitability(
+                findings,
+                self.config.state_dir,
+                now=self._now(),
+                transport=self._feed_transport,
+            )
+            if feed_note:
+                run.notes.append(feed_note)
         if self.config.triage.enabled:
             llm = client_for(self.config.triage) if self.config.triage.llm else None
             findings, run.triage = triage_findings(findings, environment=asset.environment, llm=llm)
