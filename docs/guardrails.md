@@ -98,6 +98,9 @@ It does not carry the secret context or the proposed patch. If the variable is
 unset and a call is still needed, no request is made and the run is marked
 incomplete. The model may only mark a false positive, with a reason, or set
 confidence to low. Confidence that is already low is not lowered a second time.
+OpenAI and Anthropic both cap the reply (384, 640, or 1024 tokens). A truncated
+reply is discarded and the run is marked incomplete. The asset environment does
+not change priority.
 
 Code: `agents/triage.py`, `core/llm.py`.
 

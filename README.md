@@ -72,7 +72,8 @@ score does not lower it. Reachability is not scored.
 Local triage then runs. It drops static findings under vendored and virtualenv
 trees, drops a secret finding in documentation when the context looks like a
 placeholder, and collapses two tools' reports of the same CWE at the same line, or
-the same advisory on the same package. It does not call a model unless you turn
+of the same CVE ids or the same GHSA ids on the same package and file. It does not
+call a model unless you turn
 that on, as described below.
 
 When `bwrap` is available and `runner.sandbox` is `auto` (the default), each
@@ -287,7 +288,9 @@ is not lowered again. The prompt carries the fingerprint, rule, path, line,
 category, severity, and a short message. It does not carry secret context or a
 proposed patch. A fingerprint the model has already classified is stored under the
 state directory and is not sent again. `model` is optional. When you omit it,
-OpenAI uses `gpt-4.1-mini` and Anthropic uses `claude-sonnet-4-5`.
+OpenAI uses `gpt-4.1-mini` and Anthropic uses `claude-sonnet-4-5`. Both cap the
+reply: 384 tokens for one finding, 640 for two, and 1024 after that. A truncated
+reply is not applied, and the scan is marked incomplete.
 
 ### DAST against one staging URL
 

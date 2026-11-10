@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -55,7 +56,7 @@ def triage_findings(
     state_dir: Path | None = None,
 ) -> tuple[list[Finding], list[TriageNote]]:
     """Return the findings to keep, and a note for each one set aside."""
-    del environment  # reserved for a later exposure adjustment; ranking uses confidence
+    del environment  # production and development do not change priority
     notes: list[TriageNote] = []
     kept: list[Finding] = []
     for finding in findings:
@@ -92,7 +93,29 @@ def _false_positive_reason(finding: Finding) -> str | None:
 def _deduplicate(findings: list[Finding]) -> tuple[list[Finding], list[TriageNote]]:
     dropped: set[int] = set()
     notes: list[TriageNote] = []
-    for members in _groups(findings).values():
+    # CVE and CWE grouping stays as it was. GHSA grouping is a second pass and does
+    # not rewrite fingerprints; a dropped row keeps the duplicate note the report
+    # already uses.
+    for key_for in (_dedup_key, _ghsa_key):
+        _collapse(findings, key_for, dropped, notes)
+    return [item for item in findings if id(item) not in dropped], notes
+
+
+def _collapse(
+    findings: list[Finding],
+    key_for: Callable[[Finding], tuple[object, ...] | None],
+    dropped: set[int],
+    notes: list[TriageNote],
+) -> None:
+    groups: dict[tuple[object, ...], list[Finding]] = {}
+    for finding in findings:
+        if id(finding) in dropped:
+            continue
+        key = key_for(finding)
+        if key is None:
+            continue
+        groups.setdefault(key, []).append(finding)
+    for members in groups.values():
         if len({item.tool for item in members}) < 2:
             continue
         best = max(members, key=_preference)
@@ -108,17 +131,6 @@ def _deduplicate(findings: list[Finding]) -> tuple[list[Finding], list[TriageNot
                     f"same issue as {best.fingerprint} from {best.tool}",
                 )
             )
-    return [item for item in findings if id(item) not in dropped], notes
-
-
-def _groups(findings: list[Finding]) -> dict[tuple[object, ...], list[Finding]]:
-    groups: dict[tuple[object, ...], list[Finding]] = {}
-    for finding in findings:
-        key = _dedup_key(finding)
-        if key is None:
-            continue
-        groups.setdefault(key, []).append(finding)
-    return groups
 
 
 def _dedup_key(finding: Finding) -> tuple[object, ...] | None:
@@ -142,6 +154,27 @@ def _dedup_key(finding: Finding) -> tuple[object, ...] | None:
     if not cwes or not finding.location.path or not finding.location.start_line:
         return None
     return (finding.category, finding.location.path, finding.location.start_line, cwes)
+
+
+def _ghsa_key(finding: Finding) -> tuple[object, ...] | None:
+    """Same GHSA set, package and manifest. Fingerprints are not an input."""
+    if finding.category != DEPENDENCY or finding.package is None:
+        return None
+    found = [item.upper() for item in finding.identifiers if item.upper().startswith("GHSA-")]
+    rule = finding.rule_id.upper()
+    if rule.startswith("GHSA-"):
+        found.append(rule)
+    ghsas = tuple(sorted(set(found)))
+    if not ghsas:
+        return None
+    package = finding.package
+    return (
+        DEPENDENCY,
+        package.ecosystem.lower(),
+        normalize_package_name(package.ecosystem, package.name),
+        finding.location.path or "",
+        ghsas,
+    )
 
 
 def _preference(finding: Finding) -> tuple[int, int, str]:

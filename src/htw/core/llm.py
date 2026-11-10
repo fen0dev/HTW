@@ -62,8 +62,14 @@ class HttpLlm:
         raw = self._transport(self._url, headers, body)
         try:
             payload = json.loads(raw)
+            if _truncated(self._provider, payload):
+                raise ConfigError(
+                    "the model response was truncated, so its classifications were not applied"
+                )
             content = _message_text(self._provider, payload)
             parsed = json.loads(content)
+        except ConfigError:
+            raise
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             raise ConfigError("the model did not return the expected JSON") from exc
         findings = parsed.get("findings") if isinstance(parsed, dict) else None
@@ -81,6 +87,7 @@ class HttpLlm:
         if self._provider == "openai":
             body = {
                 "model": self._model,
+                "max_tokens": _output_cap(len(items)),
                 "messages": [{"role": "user", "content": user}],
                 "response_format": {"type": "json_object"},
             }
@@ -107,12 +114,24 @@ def client_for(settings: TriageSettings, transport: Transport | None = None) -> 
 
 
 def _output_cap(count: int) -> int:
-    """Anthropic bills for the completion cap. One or two judgments do not need 1024."""
+    """Both providers bill for the completion cap. One or two judgments do not need 1024."""
     if count <= 1:
         return 384
     if count == 2:
         return 640
     return 1024
+
+
+def _truncated(provider: str, payload: object) -> bool:
+    """A cap cut the reply off. The caller treats that as an incomplete scan."""
+    if not isinstance(payload, dict):
+        return False
+    if provider == "openai":
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            return False
+        return choices[0].get("finish_reason") == "length"
+    return payload.get("stop_reason") == "max_tokens"
 
 
 def _api_key_env_message(name: str) -> str:
