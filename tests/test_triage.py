@@ -68,9 +68,7 @@ def test_the_same_ghsa_from_two_tools_collapses_without_changing_fingerprints() 
     other.fingerprint = "fp-other"
     other_package.fingerprint = "fp-requests"
 
-    kept, notes = triage_findings(
-        [trivy, grype, other, other_package], environment="development"
-    )
+    kept, notes = triage_findings([trivy, grype, other, other_package], environment="development")
 
     assert kept == [grype, other, other_package]
     assert [item.fingerprint for item in kept] == ["fp-grype", "fp-other", "fp-requests"]
@@ -236,9 +234,7 @@ def test_model_sees_only_findings_local_triage_left_unsettled(
     vendor = sast_finding(path="vendor/lib.py")
     vendor.fingerprint = "htw1:vendor"
 
-    kept, notes = triage_findings(
-        [high, medium, vendor], environment="production", llm=client
-    )
+    kept, notes = triage_findings([high, medium, vendor], environment="production", llm=client)
 
     assert high in kept and medium in kept
     assert vendor not in kept
@@ -300,7 +296,14 @@ def test_confirming_low_confidence_does_not_lower_priority_twice(
     def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
         del url, headers, body
         return _reply(
-            [{"fingerprint": "htw1:low", "false_positive": False, "confidence": "low", "reason": ""}]
+            [
+                {
+                    "fingerprint": "htw1:low",
+                    "false_positive": False,
+                    "confidence": "low",
+                    "reason": "",
+                }
+            ]
         )
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -325,9 +328,7 @@ def test_anthropic_asks_for_a_short_completion(monkeypatch: pytest.MonkeyPatch) 
     def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
         del url, headers
         seen["body"] = json.loads(body)
-        return json.dumps(
-            {"content": [{"text": json.dumps({"findings": []})}]}
-        ).encode()
+        return json.dumps({"content": [{"text": json.dumps({"findings": []})}]}).encode()
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     client = HttpLlm(
