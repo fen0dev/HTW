@@ -4,7 +4,8 @@ HTW scans source repositories and directories that you own, or that someone has
 authorized you to test. It looks at the files, picks the open-source scanners that
 fit that stack, and writes a local report of what changed since the last run. It
 can also leave fix proposals for a person to review. It does not apply them, and it
-does not open a ticket, a chat message, or a dashboard.
+does not open a ticket, a chat message, or a dashboard. Follow one invented team's
+scan, from install through the digest, in [docs/example-recon.md](docs/example-recon.md).
 
 > **Authorized use only.** Only scan systems you own or are explicitly authorized to
 > test. HTW refuses anything that is not declared, with a named authorizer and an
