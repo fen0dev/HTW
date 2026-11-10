@@ -265,7 +265,8 @@ operator already has.
 ### A model for triage
 
 With the default `triage.llm: false`, triage is the local rules above and HTW does
-not call a model. To ask a model to review the findings after those rules:
+not call a model. To ask a model to review what those rules left unsettled (not an
+obvious false positive, not a duplicate, and not already high confidence):
 
 ```yaml
 triage:
@@ -277,13 +278,16 @@ triage:
 
 `api_key_env` is the name of an environment variable, not the key. HTW reads that
 variable when the scan runs. It does not accept a key in the file, it does not
-store one, and it does not call the provider when the variable is unset. In that
-case the scan is marked incomplete and the report records the error. The model may
+store one, and it does not call the provider when the variable is unset. If a
+call was still required, the scan is marked incomplete and the report records the
+error. The model may
 only mark a false positive or set confidence to low, which lowers priority one
-step (a secret finding keeps its priority). The prompt carries the fingerprint,
-rule, path, line, category, severity, and a short message. It does not carry
-secret context or a proposed patch. `model` is optional. When you omit it, OpenAI
-uses `gpt-4.1-mini` and Anthropic uses `claude-sonnet-4-5`.
+step (a secret finding keeps its priority). A low confidence that is already low
+is not lowered again. The prompt carries the fingerprint, rule, path, line,
+category, severity, and a short message. It does not carry secret context or a
+proposed patch. A fingerprint the model has already classified is stored under the
+state directory and is not sent again. `model` is optional. When you omit it,
+OpenAI uses `gpt-4.1-mini` and Anthropic uses `claude-sonnet-4-5`.
 
 ### DAST against one staging URL
 

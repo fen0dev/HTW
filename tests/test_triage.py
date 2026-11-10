@@ -153,3 +153,145 @@ def test_missing_api_key_does_not_call_the_provider(monkeypatch: pytest.MonkeyPa
 
     assert notes[0].action == "error"
     assert "does not invent credentials" in notes[0].reason
+
+
+def _reply(findings: list[dict[str, object]]) -> bytes:
+    return json.dumps(
+        {"choices": [{"message": {"content": json.dumps({"findings": findings})}}]}
+    ).encode()
+
+
+def test_model_sees_only_findings_local_triage_left_unsettled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, str] = {}
+
+    def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
+        del url, headers
+        seen["body"] = body.decode()
+        return _reply([])
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    client = HttpLlm(
+        TriageSettings(llm=True, provider="openai", api_key_env="OPENAI_API_KEY"),
+        transport,
+    )
+    high = sast_finding(path="app/high.py")
+    high.confidence = "high"
+    high.fingerprint = "htw1:high"
+    medium = sast_finding(path="app/medium.py")
+    medium.confidence = "medium"
+    medium.fingerprint = "htw1:medium"
+    medium.message = "M" * 400
+    vendor = sast_finding(path="vendor/lib.py")
+    vendor.fingerprint = "htw1:vendor"
+
+    kept, notes = triage_findings(
+        [high, medium, vendor], environment="production", llm=client
+    )
+
+    assert high in kept and medium in kept
+    assert vendor not in kept
+    assert notes[0].fingerprint == "htw1:vendor" and notes[0].action == "false_positive"
+    assert seen["body"].count("htw1:medium") == 1
+    assert "htw1:high" not in seen["body"]
+    assert "htw1:vendor" not in seen["body"]
+    assert "M" * 160 in seen["body"]
+    assert "M" * 161 not in seen["body"]
+
+
+def test_a_classified_fingerprint_is_not_sent_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    calls = {"n": 0}
+
+    def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
+        del url, headers, body
+        calls["n"] += 1
+        return _reply(
+            [
+                {
+                    "fingerprint": "htw1:once",
+                    "false_positive": True,
+                    "confidence": "high",
+                    "reason": "test fixture, not a real issue",
+                }
+            ]
+        )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    client = HttpLlm(
+        TriageSettings(llm=True, provider="openai", api_key_env="OPENAI_API_KEY"),
+        transport,
+    )
+
+    def finding() -> object:
+        item = sast_finding()
+        item.confidence = "medium"
+        item.fingerprint = "htw1:once"
+        return item
+
+    first, notes = triage_findings(
+        [finding()], environment="production", llm=client, state_dir=tmp_path
+    )
+    second, again = triage_findings(
+        [finding()], environment="production", llm=client, state_dir=tmp_path
+    )
+
+    assert first == [] and second == []
+    assert calls["n"] == 1
+    assert notes[0].reason == again[0].reason
+    assert "test fixture" in notes[0].reason
+
+
+def test_confirming_low_confidence_does_not_lower_priority_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
+        del url, headers, body
+        return _reply(
+            [{"fingerprint": "htw1:low", "false_positive": False, "confidence": "low", "reason": ""}]
+        )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    client = HttpLlm(
+        TriageSettings(llm=True, provider="openai", api_key_env="OPENAI_API_KEY"),
+        transport,
+    )
+    code = sast_finding()
+    code.priority = "P1"
+    code.confidence = "low"
+    code.fingerprint = "htw1:low"
+
+    triage_findings([code], environment="production", llm=client)
+
+    assert code.priority == "P2"
+    assert code.confidence == "low"
+
+
+def test_anthropic_asks_for_a_short_completion(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
+        del url, headers
+        seen["body"] = json.loads(body)
+        return json.dumps(
+            {"content": [{"text": json.dumps({"findings": []})}]}
+        ).encode()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    client = HttpLlm(
+        TriageSettings(llm=True, provider="anthropic", api_key_env="ANTHROPIC_API_KEY"),
+        transport,
+    )
+    one = sast_finding()
+    one.fingerprint = "htw1:one"
+    triage_findings([one], environment="development", llm=client)
+    assert seen["body"]["max_tokens"] == 384
+    assert seen["body"]["model"] == "claude-sonnet-4-5"
+
+    two = [sast_finding(path="app/a.py"), sast_finding(path="app/b.py")]
+    two[0].fingerprint = "htw1:a"
+    two[1].fingerprint = "htw1:b"
+    triage_findings(two, environment="development", llm=client)
+    assert seen["body"]["max_tokens"] == 640

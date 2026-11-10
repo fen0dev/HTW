@@ -89,11 +89,15 @@ dropped only when its context matches a placeholder pattern.
 
 `triage.llm: true` also requires `provider` (`openai` or `anthropic`) and
 `api_key_env`, the name of an environment variable. The key is read at call time
-and is not written into the scope file, the report or the prompt. The prompt carries
-the fingerprint, rule, path, line, category, severity and a short message. It does
-not carry the secret context or the proposed patch. If the variable is unset, no
-request is made and the run is marked incomplete. The model may only mark a false
-positive, with a reason, or set confidence to low.
+and is not written into the scope file, the report or the prompt. The model is
+asked only about findings the local rules did not settle, and a fingerprint it
+already classified is read back from the state directory instead of being sent
+again. That file stores the classification, not the finding text. The prompt
+carries the fingerprint, rule, path, line, category, severity and a short message.
+It does not carry the secret context or the proposed patch. If the variable is
+unset and a call is still needed, no request is made and the run is marked
+incomplete. The model may only mark a false positive, with a reason, or set
+confidence to low. Confidence that is already low is not lowered a second time.
 
 Code: `agents/triage.py`, `core/llm.py`.
 

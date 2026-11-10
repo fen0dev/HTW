@@ -1,14 +1,20 @@
 """Triage: deduplicate, rank and filter obvious false positives.
 
 The rules are deterministic and run with no network. A model is consulted only when
-the caller passes one, and its answer can hide a finding or lower confidence. It
-cannot raise a severity and it is not given secret values or source lines.
+the caller passes one, and only for findings those rules did not settle. Its answer
+can hide a finding or lower confidence. It cannot raise a severity and it is not
+given secret values or source lines. A fingerprint it has already classified is
+reused from the state directory and is not sent again.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from htw.core.finding import DEPENDENCY, SECRET, Finding
 from htw.core.fingerprint import normalize_package_name
@@ -28,6 +34,9 @@ _PLACEHOLDER_RE = re.compile(
     r"|not-a-real|insert[-_ ]key"
 )
 _CONFIDENCE = {"high": 2, "medium": 1, "low": 0}
+_MESSAGE_LIMIT = 160
+_MEMORY_VERSION = 1
+_FINGERPRINT_RE = re.compile(r"^[A-Za-z0-9:._-]{1,128}$")
 
 
 @dataclass(frozen=True)
@@ -43,6 +52,7 @@ def triage_findings(
     *,
     environment: str,
     llm: HttpLlm | None = None,
+    state_dir: Path | None = None,
 ) -> tuple[list[Finding], list[TriageNote]]:
     """Return the findings to keep, and a note for each one set aside."""
     del environment  # reserved for a later exposure adjustment; ranking uses confidence
@@ -60,7 +70,7 @@ def triage_findings(
         _lower_low_confidence(finding)
     if llm is not None:
         try:
-            kept, model_notes = _apply_model(kept, llm)
+            kept, model_notes = _apply_model(kept, llm, state_dir)
         except ConfigError as exc:
             notes.append(TriageNote("-", "LLM triage", "error", str(exc)))
         else:
@@ -148,40 +158,147 @@ def _lower_low_confidence(finding: Finding) -> None:
     finding.priority = PRIORITIES[min(PRIORITIES.index(finding.priority) + 1, len(PRIORITIES) - 1)]
 
 
-def _apply_model(findings: list[Finding], llm: HttpLlm) -> tuple[list[Finding], list[TriageNote]]:
-    by_id = {finding.fingerprint: finding for finding in findings}
-    items = [
-        {
-            "fingerprint": finding.fingerprint,
-            "rule": finding.rule_id,
-            "path": finding.location.path or "",
-            "line": str(finding.location.start_line or ""),
-            "category": finding.category,
-            "severity": finding.severity.value,
-            "message": finding.message[:400],
-        }
-        for finding in findings
-    ]
+def _settled(finding: Finding) -> bool:
+    """High confidence already survived the local false-positive rules."""
+    return (finding.confidence or "").lower() == "high"
+
+
+def _apply_model(
+    findings: list[Finding], llm: HttpLlm, state_dir: Path | None
+) -> tuple[list[Finding], list[TriageNote]]:
+    grouped: dict[str, list[Finding]] = {}
+    for finding in findings:
+        grouped.setdefault(finding.fingerprint, []).append(finding)
+    stored = _load_memory(state_dir)
+    pending: list[Finding] = []
+    seen: set[str] = set()
+    drop: set[str] = set()
+    notes: list[TriageNote] = []
+    for finding in findings:
+        fingerprint = finding.fingerprint
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        cached = stored.get(fingerprint)
+        if cached is not None:
+            _replay(grouped[fingerprint], cached, drop, notes)
+            continue
+        if _settled(finding):
+            continue
+        pending.append(finding)
+    if not pending:
+        return [finding for finding in findings if finding.fingerprint not in drop], notes
+    items = [_item(finding) for finding in pending]
+    sent = {finding.fingerprint for finding in pending}
     try:
         judgments = llm.judge(items)
     except ConfigError:
         raise
     except Exception as exc:
         raise ConfigError(f"LLM triage failed ({type(exc).__name__})") from exc
-    drop: set[str] = set()
-    notes: list[TriageNote] = []
+    fresh: dict[str, dict[str, Any]] = {}
     for judgment in judgments:
         fingerprint = str(judgment.get("fingerprint") or "")
-        finding = by_id.get(fingerprint)
-        if finding is None or fingerprint in drop:
+        members = grouped.get(fingerprint)
+        if fingerprint not in sent or not members or fingerprint in fresh:
             continue
-        if judgment.get("confidence") == "low":
+        saved = _saved_judgment(judgment)
+        fresh[fingerprint] = saved
+        _replay(members, saved, drop, notes)
+    if fresh:
+        stored.update(fresh)
+        _save_memory(state_dir, stored)
+    return [finding for finding in findings if finding.fingerprint not in drop], notes
+
+
+def _item(finding: Finding) -> dict[str, str]:
+    return {
+        "fingerprint": finding.fingerprint,
+        "rule": finding.rule_id,
+        "path": finding.location.path or "",
+        "line": str(finding.location.start_line or ""),
+        "category": finding.category,
+        "severity": finding.severity.value,
+        "message": finding.message[:_MESSAGE_LIMIT],
+    }
+
+
+def _saved_judgment(judgment: dict[str, Any]) -> dict[str, Any]:
+    reason = str(judgment.get("reason") or "").strip()[:300]
+    false_positive = judgment.get("false_positive") is True and bool(reason)
+    confidence = "low" if judgment.get("confidence") == "low" else ""
+    return {"false_positive": false_positive, "confidence": confidence, "reason": reason}
+
+
+def _replay(
+    members: list[Finding], saved: dict[str, Any], drop: set[str], notes: list[TriageNote]
+) -> None:
+    fingerprint = members[0].fingerprint
+    for finding in members:
+        if saved.get("confidence") == "low" and finding.confidence != "low":
             finding.confidence = "low"
             _lower_low_confidence(finding)
-        reason = str(judgment.get("reason") or "").strip()
-        if judgment.get("false_positive") is True and reason:
-            drop.add(fingerprint)
-            notes.append(
-                TriageNote(fingerprint, finding.title, "false_positive", f"model: {reason[:300]}")
-            )
-    return [finding for finding in findings if finding.fingerprint not in drop], notes
+    reason = str(saved.get("reason") or "")
+    if saved.get("false_positive") is True and reason:
+        drop.add(fingerprint)
+        notes.append(
+            TriageNote(fingerprint, members[0].title, "false_positive", f"model: {reason[:300]}")
+        )
+
+
+def _memory_path(state_dir: Path | None) -> Path | None:
+    if state_dir is None:
+        return None
+    try:
+        root = state_dir.resolve()
+        directory = root / "cache"
+        path = directory / "llm-triage.json"
+        if directory.is_symlink() or path.is_symlink():
+            return None
+        directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+        resolved = directory.resolve() / path.name
+    except OSError:
+        return None
+    if resolved != root and root not in resolved.parents:
+        return None
+    return path
+
+
+def _load_memory(state_dir: Path | None) -> dict[str, dict[str, Any]]:
+    path = _memory_path(state_dir)
+    if path is None or path.is_symlink() or not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return {}
+    if not isinstance(data, dict) or data.get("version") != _MEMORY_VERSION:
+        return {}
+    raw = data.get("judgments")
+    if not isinstance(raw, dict):
+        return {}
+    kept: dict[str, dict[str, Any]] = {}
+    for fingerprint, entry in raw.items():
+        if not isinstance(fingerprint, str) or not _FINGERPRINT_RE.fullmatch(fingerprint):
+            continue
+        if not isinstance(entry, dict):
+            continue
+        kept[fingerprint] = _saved_judgment(entry)
+    return kept
+
+
+def _save_memory(state_dir: Path | None, judgments: dict[str, dict[str, Any]]) -> None:
+    path = _memory_path(state_dir)
+    if path is None or path.is_symlink():
+        return
+    payload = {
+        "version": _MEMORY_VERSION,
+        "judgments": {key: judgments[key] for key in sorted(judgments)},
+    }
+    temporary = path.with_suffix(".tmp")
+    try:
+        temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    except OSError:
+        return
