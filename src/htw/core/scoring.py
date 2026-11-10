@@ -1,8 +1,9 @@
 """Priority (P0-P3): scanner severity adjusted by how much the asset matters.
 
-This is the deterministic baseline. Exploitability (EPSS, CISA KEV), reachability and
-triage confidence are planned refinements; until then the rule is small enough to
-read in full.
+This is the deterministic baseline. Public EPSS and CISA KEV data can raise it by
+one step each, and only when that feed was fetched or is still in a fresh cache
+(`exploitability.py`). A missing feed does not raise priority. Reachability is not
+part of this score. Triage may then lower a low-confidence finding by one step.
 """
 
 from __future__ import annotations

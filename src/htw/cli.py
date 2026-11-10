@@ -55,6 +55,11 @@ triage:
   enabled: true
   llm: false
 
+# Public EPSS and CISA KEV. Fetched only for CVE ids already on a finding,
+# cached under state_dir, and ignored when a feed is unavailable.
+exploitability:
+  enabled: true
+
 assets:
   - id: {asset_id}
     type: {asset_type}

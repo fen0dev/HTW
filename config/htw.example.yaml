@@ -34,6 +34,13 @@ triage:
   enabled: true
   llm: false
 
+# Public exploitability data. The run downloads the CISA KEV catalog and FIRST
+# EPSS scores for CVE ids already present on a finding, caches them under
+# state_dir for 24 hours, and does not raise priority when a feed is unavailable.
+# No API key is read or sent. Set enabled to false to skip the downloads.
+exploitability:
+  enabled: true
+
 # How scanner processes are run.
 runner:
   timeout_seconds: 900     # per scanner invocation
