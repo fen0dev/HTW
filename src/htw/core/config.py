@@ -45,7 +45,7 @@ AGENT_OPTIONS: dict[str, tuple[str, ...]] = {
     "dast": (),
 }
 APPROVAL_CONTROLS = ("dast",)
-LLM_PROVIDERS = ("openai", "anthropic")
+LLM_PROVIDERS = ("openai", "anthropic", "local")
 _API_KEY_ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,60}$")
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
@@ -133,13 +133,18 @@ class FixSettings:
 
 @dataclass(frozen=True)
 class TriageSettings:
-    """Deterministic triage is on by default. A model is never called unless configured."""
+    """Deterministic triage is on by default. A model is never called unless configured.
+
+    `local` is an OpenAI-compatible server. It needs `base_url` and `model`.
+    `api_key_env` is optional for that provider and required for the others.
+    """
 
     enabled: bool = True
     llm: bool = False
     provider: str | None = None
     model: str | None = None
     api_key_env: str | None = None
+    base_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -287,14 +292,15 @@ def _parse_time(value: object, where: str, key: str) -> time:
     raise ConfigError(f'{where}: `{key}` must be a UTC time written as "HH:MM"')
 
 
-_FORBIDDEN_HOSTS = frozenset(
+# Same names the DAST target guard refuses. Loopback is not in this set: a local
+# model server is allowed to listen there.
+_METADATA_HOSTS = frozenset(
     {
-        "localhost",
-        "localhost.localdomain",
         "metadata.google.internal",
         "metadata.internal",
     }
 )
+_FORBIDDEN_HOSTS = _METADATA_HOSTS | frozenset({"localhost", "localhost.localdomain"})
 
 
 def validate_target_url(url: str, where: str) -> str:
@@ -324,6 +330,41 @@ def validate_target_url(url: str, where: str) -> str:
     ):
         raise ConfigError(f"{where}: {host} is not a scannable application target")
     return url
+
+
+def validate_local_model_url(url: str, where: str) -> str:
+    """Accept the base URL of an OpenAI-compatible server the operator runs.
+
+    Loopback and an ordinary host are allowed. Link-local addresses and the cloud
+    metadata names refused by :func:`validate_target_url` are not: they are not a
+    model the operator chose.
+    """
+    stripped = url.strip()
+    parts = urlsplit(stripped)
+    host = (parts.hostname or "").lower().rstrip(".")
+    if parts.scheme not in {"https", "http"} or not host or parts.username or parts.password:
+        raise ConfigError(
+            f"{where}: `base_url` must be an http(s) URL with a host and no credentials "
+            f"(got {url!r})"
+        )
+    if host in _METADATA_HOSTS or _is_link_local(host):
+        raise ConfigError(
+            f"{where}: `base_url` host {host} is a link-local or cloud metadata address"
+        )
+    return stripped
+
+
+def _is_link_local(host: str) -> bool:
+    """True for a link-local literal, including a zone id or an IPv4-mapped form."""
+    literal = host.split("%", 1)[0]
+    try:
+        address = ipaddress.ip_address(literal)
+    except ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)
+    if mapped is not None:
+        address = mapped
+    return bool(address.is_link_local)
 
 
 def _parse_authorization(section: _Section) -> Authorization:
@@ -416,7 +457,11 @@ def _parse_triage(section: _Section) -> TriageSettings:
     llm = section.boolean("llm", False)
     provider = section.string("provider")
     model = section.string("model")
-    api_key_env = section.string("api_key_env")
+    base_url = section.string("base_url")
+    if provider == "local":
+        api_key_env = _blank_env_name(section, "api_key_env")
+    else:
+        api_key_env = section.string("api_key_env")
     section.finish()
     if llm:
         if provider not in LLM_PROVIDERS:
@@ -424,18 +469,50 @@ def _parse_triage(section: _Section) -> TriageSettings:
                 f"{section.where}: `provider` must be one of {', '.join(LLM_PROVIDERS)} "
                 "when `llm` is true. HTW does not call a model unless the provider is named."
             )
-        if not api_key_env or not _API_KEY_ENV_RE.match(api_key_env):
+        if provider == "local":
+            if not base_url:
+                raise ConfigError(
+                    f"{section.where}: `base_url` is required when `provider` is local. "
+                    "It is the OpenAI-compatible root HTW will call."
+                )
+            base_url = validate_local_model_url(base_url, section.where)
+            if not model:
+                raise ConfigError(
+                    f"{section.where}: `model` is required when `provider` is local. "
+                    "HTW does not pick a default model."
+                )
+        else:
+            if base_url:
+                raise ConfigError(
+                    f"{section.where}: `base_url` is only used when `provider` is local"
+                )
+            if not api_key_env:
+                raise ConfigError(
+                    f"{section.where}: `api_key_env` must name the environment variable that holds "
+                    "the provider credential. HTW does not accept a key inline and does not invent one."
+                )
+        if api_key_env and not _API_KEY_ENV_RE.match(api_key_env):
             raise ConfigError(
                 f"{section.where}: `api_key_env` must name the environment variable that holds "
                 "the provider credential. HTW does not accept a key inline and does not invent one."
             )
-    elif provider or model or api_key_env:
+    elif provider or model or api_key_env or base_url:
         raise ConfigError(
-            f"{section.where}: `provider`, `model` and `api_key_env` require `llm: true`"
+            f"{section.where}: `provider`, `model`, `base_url` and `api_key_env` require `llm: true`"
         )
     if llm and not enabled:
         raise ConfigError(f"{section.where}: `llm: true` requires `enabled: true`")
-    return TriageSettings(enabled, llm, provider, model, api_key_env)
+    return TriageSettings(enabled, llm, provider, model, api_key_env, base_url)
+
+
+def _blank_env_name(section: _Section, key: str) -> str | None:
+    """An environment variable name. A missing or blank value means there is none."""
+    value = section.get(key)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    raise ConfigError(f"{section.where}: `{key}` must be a non-empty string")
 
 
 def _parse_exploitability(section: _Section) -> ExploitabilitySettings:

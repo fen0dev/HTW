@@ -83,7 +83,8 @@ src/htw/
 This follows the layout in the architecture plan, as one installable package. Parts of
 the plan that this release does not need (`evals/`, tracker and chat integrations,
 live cloud hardening, fuzzing) are not stubbed out. The model client is one module
-and stays unused until `triage.llm` is set.
+and stays unused until `triage.llm` is set. The provider is OpenAI, Anthropic, or
+a local OpenAI-compatible base URL the operator sets.
 
 ## Stack detection
 

@@ -392,3 +392,318 @@ def test_a_truncated_reply_is_not_applied(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert notes[0].action == "error"
     assert "truncated" in notes[0].reason
     assert not (tmp_path / "cache" / "llm-triage.json").exists()
+
+
+def _triage_scope(tmp_path, top: str):
+    path = tmp_path / "htw.yaml"
+    path.write_text(scope_yaml([{"id": "a", "path": "."}], top=top), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://169.254.169.254/v1",
+        "https://metadata.google.internal/computeMetadata/v1",
+        "http://metadata.internal/v1",
+        "http://169.254.1.1/v1",
+        "http://[fe80::1]/v1",
+        "http://[fe80::1%25eth0]/v1",
+        "http://[::ffff:169.254.169.254]/v1",
+    ],
+)
+def test_local_base_url_refuses_metadata_and_link_local(tmp_path, base_url: str) -> None:
+    path = _triage_scope(
+        tmp_path,
+        "triage:\n"
+        "  llm: true\n"
+        "  provider: local\n"
+        f"  base_url: {json.dumps(base_url)}\n"
+        "  model: your-model-name\n",
+    )
+    with pytest.raises(ConfigError, match="link-local or cloud metadata"):
+        load_config(path)
+
+
+def test_local_base_url_refuses_credentials_and_a_non_http_scheme(tmp_path) -> None:
+    for base_url in ("http://user:secret@127.0.0.1:8000/v1", "file:///tmp/model"):
+        path = _triage_scope(
+            tmp_path,
+            "triage:\n"
+            "  llm: true\n"
+            "  provider: local\n"
+            f"  base_url: {json.dumps(base_url)}\n"
+            "  model: your-model-name\n",
+        )
+        with pytest.raises(ConfigError, match="base_url"):
+            load_config(path)
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://127.0.0.1:8000/v1",
+        "http://localhost:8080/v1",
+        "http://[::1]:8080/v1",
+        "http://ollama.localhost:11434/v1",
+        "https://models.example.com/v1",
+    ],
+)
+def test_local_provider_accepts_loopback_and_an_ordinary_host(tmp_path, base_url: str) -> None:
+    path = _triage_scope(
+        tmp_path,
+        "triage:\n"
+        "  llm: true\n"
+        "  provider: local\n"
+        f"  base_url: {json.dumps(base_url)}\n"
+        "  model: your-model-name\n",
+    )
+    config = load_config(path)
+    assert config.triage.llm is True
+    assert config.triage.provider == "local"
+    assert config.triage.base_url == base_url
+    assert config.triage.model == "your-model-name"
+    assert config.triage.api_key_env is None
+
+
+def test_local_provider_treats_a_blank_api_key_name_as_unset(tmp_path) -> None:
+    path = _triage_scope(
+        tmp_path,
+        "triage:\n"
+        "  llm: true\n"
+        "  provider: local\n"
+        "  base_url: http://127.0.0.1:8000/v1\n"
+        "  model: your-model-name\n"
+        '  api_key_env: ""\n',
+    )
+    config = load_config(path)
+    assert config.triage.api_key_env is None
+
+
+def test_local_provider_requires_a_base_url_and_a_model_name(tmp_path) -> None:
+    missing_model = _triage_scope(
+        tmp_path,
+        "triage:\n  llm: true\n  provider: local\n  base_url: http://127.0.0.1:8000/v1\n",
+    )
+    with pytest.raises(ConfigError, match="does not pick a default model"):
+        load_config(missing_model)
+
+    missing_url = _triage_scope(
+        tmp_path,
+        "triage:\n  llm: true\n  provider: local\n  model: your-model-name\n",
+    )
+    with pytest.raises(ConfigError, match="base_url"):
+        load_config(missing_url)
+
+    cloud = _triage_scope(
+        tmp_path,
+        "triage:\n"
+        "  llm: true\n"
+        "  provider: openai\n"
+        "  api_key_env: OPENAI_API_KEY\n"
+        "  base_url: http://127.0.0.1:8000/v1\n",
+    )
+    with pytest.raises(ConfigError, match="only used when `provider` is local"):
+        load_config(cloud)
+
+
+def test_local_fields_stay_off_unless_llm_is_enabled(tmp_path) -> None:
+    path = _triage_scope(
+        tmp_path,
+        "triage:\n  llm: false\n  provider: local\n  base_url: http://127.0.0.1:8000/v1\n",
+    )
+    with pytest.raises(ConfigError, match="require `llm: true`"):
+        load_config(path)
+
+
+def test_local_client_refuses_a_metadata_url_before_any_request() -> None:
+    def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
+        raise AssertionError(url)
+
+    with pytest.raises(ConfigError, match="link-local or cloud metadata"):
+        HttpLlm(
+            TriageSettings(
+                llm=True,
+                provider="local",
+                model="your-model-name",
+                base_url="http://169.254.169.254/v1",
+            ),
+            transport,
+        )
+
+
+def test_local_provider_applies_a_mocked_completion(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
+        seen["url"] = url
+        seen["headers"] = dict(headers)
+        seen["body"] = json.loads(body)
+        return _reply(
+            [
+                {
+                    "fingerprint": "htw1:local",
+                    "false_positive": True,
+                    "confidence": "high",
+                    "reason": "test fixture, not a real issue",
+                }
+            ]
+        )
+
+    monkeypatch.delenv("LOCAL_LLM_API_KEY", raising=False)
+    client = HttpLlm(
+        TriageSettings(
+            llm=True,
+            provider="local",
+            model="your-model-name",
+            base_url="http://127.0.0.1:8000/v1/",
+        ),
+        transport,
+    )
+    finding = sast_finding()
+    finding.fingerprint = "htw1:local"
+    finding.confidence = "medium"
+    finding.context = "super-secret-line"
+    finding.line_fix = "patched source"
+
+    kept, notes = triage_findings([finding], environment="production", llm=client)
+
+    assert kept == []
+    assert notes[0].action == "false_positive"
+    assert seen["url"] == "http://127.0.0.1:8000/v1/chat/completions"
+    headers = seen["headers"]
+    assert isinstance(headers, dict)
+    assert "Authorization" not in headers
+    body = seen["body"]
+    assert isinstance(body, dict)
+    assert body["model"] == "your-model-name"
+    assert body["max_tokens"] == 384
+    content = str(body["messages"][0]["content"])
+    item = json.loads(content.split("\n", 1)[1])[0]
+    assert item == {
+        "fingerprint": "htw1:local",
+        "rule": "python.lang.security.eval",
+        "path": "app/server.py",
+        "line": "10",
+        "category": "sast",
+        "severity": "high",
+        "message": "eval() on request data",
+    }
+    encoded = json.dumps(body)
+    assert "super-secret-line" not in encoded
+    assert "patched source" not in encoded
+
+
+def test_local_provider_calls_when_the_named_variable_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
+        del url, body
+        seen["headers"] = dict(headers)
+        return _reply([])
+
+    monkeypatch.setenv("LOCAL_LLM_API_KEY", "")
+    client = HttpLlm(
+        TriageSettings(
+            llm=True,
+            provider="local",
+            model="your-model-name",
+            base_url="http://127.0.0.1:8000/v1",
+            api_key_env="LOCAL_LLM_API_KEY",
+        ),
+        transport,
+    )
+    finding = sast_finding()
+    finding.fingerprint = "htw1:empty"
+    triage_findings([finding], environment="development", llm=client)
+    headers = seen["headers"]
+    assert isinstance(headers, dict)
+    assert "Authorization" not in headers
+
+
+def test_local_provider_sends_a_bearer_token_when_one_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, str] = {}
+
+    def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
+        del url, body
+        seen["authorization"] = headers.get("Authorization", "")
+        return _reply([])
+
+    monkeypatch.setenv("LOCAL_LLM_API_KEY", "local-test-token")
+    client = HttpLlm(
+        TriageSettings(
+            llm=True,
+            provider="local",
+            model="your-model-name",
+            base_url="http://10.1.2.3:8000/v1",
+            api_key_env="LOCAL_LLM_API_KEY",
+        ),
+        transport,
+    )
+    finding = sast_finding()
+    finding.fingerprint = "htw1:token"
+    triage_findings([finding], environment="development", llm=client)
+    assert seen["authorization"] == "Bearer local-test-token"
+
+
+def test_a_truncated_local_reply_is_not_applied(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    def transport(url: str, headers: dict[str, str], body: bytes) -> bytes:
+        del url, headers, body
+        return json.dumps(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "findings": [
+                                        {
+                                            "fingerprint": "htw1:cut",
+                                            "false_positive": True,
+                                            "confidence": "high",
+                                            "reason": "incomplete",
+                                        }
+                                    ]
+                                }
+                            )
+                        },
+                    }
+                ]
+            }
+        ).encode()
+
+    monkeypatch.delenv("LOCAL_LLM_API_KEY", raising=False)
+    client = HttpLlm(
+        TriageSettings(
+            llm=True,
+            provider="local",
+            model="your-model-name",
+            base_url="http://127.0.0.1:8000/v1",
+        ),
+        transport,
+    )
+    finding = sast_finding()
+    finding.fingerprint = "htw1:cut"
+    finding.confidence = "medium"
+
+    kept, notes = triage_findings(
+        [finding], environment="production", llm=client, state_dir=tmp_path
+    )
+
+    assert kept == [finding]
+    assert finding.confidence == "medium"
+    assert notes[0].action == "error"
+    assert "truncated" in notes[0].reason
+    assert not (tmp_path / "cache" / "llm-triage.json").exists()
+
+
+def test_local_transport_does_not_follow_a_redirect() -> None:
+    from htw.core.llm import _RefuseRedirect
+
+    with pytest.raises(ConfigError, match="will not follow"):
+        _RefuseRedirect().redirect_request(None, None, 302, "Found", {}, "http://169.254.169.254/")

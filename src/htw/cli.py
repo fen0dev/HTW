@@ -51,7 +51,7 @@ fixes:
   private_destination: false
 
 # Deterministic triage (deduplicate, rank, drop obvious false positives).
-# A model is off unless provider and api_key_env are set. No key is stored here.
+# A model stays off while llm is false. No key is stored here.
 triage:
   enabled: true
   llm: false
