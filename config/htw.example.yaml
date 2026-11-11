@@ -28,8 +28,14 @@ fixes:
   pull_requests: false
   private_destination: false
 
-# Local triage. A model stays off until provider and api_key_env are set.
-# HTW reads the key from that environment variable and does not store it.
+# Triage rules run on this machine. A model stays off while llm is false.
+# provider may be openai, anthropic, or local. openai and anthropic need
+# api_key_env (the variable name, not the key). local needs base_url and
+# model, and there is no default model. api_key_env is optional for local.
+# Link-local and cloud metadata base URLs are refused.
+#   provider: local
+#   base_url: http://127.0.0.1:8000/v1
+#   model: your-model-name
 triage:
   enabled: true
   llm: false

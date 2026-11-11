@@ -259,38 +259,60 @@ report that way.
 
 Three things stay off until the scope file says otherwise. Turning them on does
 not create a GitHub token, a cloud credential, or a scanner license. The only new
-credential is the model provider key described below, and only if you enable the
-model. EPSS and CISA KEV need no key. Draft pull requests use the `gh` login the
+credential is the model provider key described below, and only if you enable a
+provider that uses one. EPSS and CISA KEV need no key. Draft pull requests use the `gh` login the
 operator already has.
 
 ### A model for triage
 
 With the default `triage.llm: false`, triage is the local rules above and HTW does
 not call a model. To ask a model to review what those rules left unsettled (not an
-obvious false positive, not a duplicate, and not already high confidence):
+obvious false positive, not a duplicate, and not already high confidence), set
+`provider` to `openai`, `anthropic`, or `local`.
 
 ```yaml
 triage:
   enabled: true
   llm: true
-  provider: openai          # openai or anthropic
+  provider: openai          # or anthropic
   api_key_env: OPENAI_API_KEY
 ```
 
 `api_key_env` is the name of an environment variable, not the key. HTW reads that
-variable when the scan runs. It does not accept a key in the file, it does not
-store one, and it does not call the provider when the variable is unset. If a
-call was still required, the scan is marked incomplete and the report records the
-error. The model may
-only mark a false positive or set confidence to low, which lowers priority one
-step (a secret finding keeps its priority). A low confidence that is already low
-is not lowered again. The prompt carries the fingerprint, rule, path, line,
-category, severity, and a short message. It does not carry secret context or a
-proposed patch. A fingerprint the model has already classified is stored under the
-state directory and is not sent again. `model` is optional. When you omit it,
-OpenAI uses `gpt-4.1-mini` and Anthropic uses `claude-sonnet-4-5`. Both cap the
-reply: 384 tokens for one finding, 640 for two, and 1024 after that. A truncated
-reply is not applied, and the scan is marked incomplete.
+variable when the scan runs. It does not accept a key in the file and it does not
+store one. For OpenAI and Anthropic it does not call the provider when the
+variable is unset. If a call was still required, the scan is marked incomplete
+and the report records the error. The model may only mark a false positive or set
+confidence to low, which lowers priority one step (a secret finding keeps its
+priority). A low confidence that is already low is not lowered again. The prompt
+carries the fingerprint, rule, path, line, category, severity, and a short
+message. It does not carry secret context or a proposed patch. A fingerprint the
+model has already classified is stored under the state directory and is not sent
+again. `model` is optional for OpenAI and Anthropic. When you omit it, OpenAI
+uses `gpt-4.1-mini` and Anthropic uses `claude-sonnet-4-5`. Every provider caps
+the reply: 384 tokens for one finding, 640 for two, and 1024 after that. A
+truncated reply is not applied, and the scan is marked incomplete.
+
+`provider: local` sends that same prompt to an OpenAI-compatible server you run,
+such as Ollama, llama.cpp, or vLLM. Set `base_url` to the server's API root (HTW
+posts to `<base_url>/chat/completions`) and `model` to the name that server
+already serves. There is no default model. `api_key_env` is optional: if you
+leave it out, or the variable is unset or empty, HTW still calls the server and
+does not send a bearer token.
+
+```yaml
+triage:
+  enabled: true
+  llm: true
+  provider: local
+  base_url: http://127.0.0.1:8000/v1
+  model: your-model-name
+```
+
+`base_url` must be `http` or `https`, with a host and no user or password.
+Loopback and any ordinary host you name are allowed. Link-local addresses and
+cloud metadata names are refused, including `169.254.169.254` and
+`metadata.google.internal`.
 
 ### DAST against one staging URL
 

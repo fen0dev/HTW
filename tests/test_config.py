@@ -199,5 +199,7 @@ def test_the_example_files_in_the_repository_are_valid() -> None:
 
     assert [asset.id for asset in config.assets] == ["payments-api", "build-scripts"]
     assert config.fixes.propose is False
+    assert config.triage.llm is False
+    assert config.triage.provider is None
     assert all(asset.max_level is ControlLevel.L0 for asset in config.assets)
     assert len(suppressions.active) == 2
